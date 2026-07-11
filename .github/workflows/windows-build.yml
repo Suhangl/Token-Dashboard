@@ -1,0 +1,50 @@
+name: Windows Build & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build widget
+        shell: powershell
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (!(Test-Path $csc)) { $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
+          $netfx = "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.0"
+          if (!(Test-Path $netfx)) {
+            $netfx = (Get-ChildItem "$env:WINDIR\Microsoft.NET\Framework64" -Directory | Where-Object { $_.Name -match '^v4' } | Sort-Object Name -Descending | Select-Object -First 1).FullName
+            if ($netfx) { Write-Host "Using runtime: $netfx" } else { throw "No .NET Framework reference assemblies or runtime found" }
+          }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & $csc /nologo /target:winexe /optimize+ /out:dist\CodexDashboard.exe /reference:System.Web.Extensions.dll /reference:"$netfx\System.Xaml.dll" /reference:"$netfx\WindowsBase.dll" /reference:"$netfx\PresentationCore.dll" /reference:"$netfx\PresentationFramework.dll" Program.cs
+          if ($LASTEXITCODE -ne 0) { throw "Widget build failed" }
+          Write-Host "Widget built successfully"
+
+      - name: Build & run tests
+        shell: powershell
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (!(Test-Path $csc)) { $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
+          $netfx = "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.0"
+          if (!(Test-Path $netfx)) {
+            $netfx = (Get-ChildItem "$env:WINDIR\Microsoft.NET\Framework64" -Directory | Where-Object { $_.Name -match '^v4' } | Sort-Object Name -Descending | Select-Object -First 1).FullName
+          }
+          & $csc /nologo /target:exe /main:ProgramTests /out:dist\ProviderTests.exe /reference:System.Web.Extensions.dll /reference:"$netfx\System.Xaml.dll" /reference:"$netfx\WindowsBase.dll" /reference:"$netfx\PresentationCore.dll" /reference:"$netfx\PresentationFramework.dll" Program.cs ProgramTests.cs
+          if ($LASTEXITCODE -ne 0) { throw "Test build failed" }
+          $result = & .\dist\ProviderTests.exe 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Error $result; throw "Tests failed" }
+          Write-Host $result
+
+      - name: Check for whitespace issues
+        shell: powershell
+        run: |
+          git diff --check HEAD~1..HEAD 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Whitespace issues found" }
+          Write-Host "No whitespace issues"

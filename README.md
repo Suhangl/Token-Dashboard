@@ -1,46 +1,127 @@
 # Token Dashboard
 
-单文件 WPF 桌面悬浮组件，显示 Codex / MiniMax / DeepSeek 三平台用量。
+A lightweight Windows desktop dashboard for monitoring AI token plans, quotas, balances, and local usage estimates — single WPF file, zero dependencies beyond the .NET Framework built into Windows.
 
-## 功能
+Currently supports **Codex**, **MiniMax**, and **DeepSeek**.
 
-- 无边框置顶悬浮窗，DWM Acrylic 原生玻璃效果
-- Codex：5h + Week 额度百分比（app-server JSON-RPC）+ 本地 token 估算（SQLite）
-- MiniMax：5h + Week 剩余百分比（mmx CLI / Token Plan API），含 5h 重置倒计时
-- DeepSeek：余额查询（官方 API / 手动输入），含预算百分比进度条
-- 每分钟自动刷新，状态灯（绿=正常 / 黄=刷新中 / 红=不可用）
-- 右键菜单：刷新、设置、置顶、退出
-- 设置存 `%APPDATA%\CodexDashboard\settings.json`，API 密钥存 Windows 凭据管理器
+![screenshot](docs/screenshot.png)
 
-## 构建
+## Features
+
+- Borderless always-on-top floating panel with native DWM Acrylic glass
+- **Codex**: 5h + weekly quota percentages via local `app-server` JSON-RPC + local token estimate from SQLite
+- **MiniMax**: 5h + weekly remaining percentage via `mmx` CLI or Token Plan remains API
+- **DeepSeek**: balance query via official API with manual fallback, budget-aware progress bar
+- Auto-refresh every 60 seconds (configurable)
+- Status dot: green (healthy) / yellow (refreshing) / red (unavailable)
+- Right-click menu: Refresh, Settings, Always on Top, Exit
+- Provider source tracking per snapshot (OfficialApi / Cli / Manual / Cached / LocalEstimate)
+
+## Requirements
+
+- Windows 10 or later (DWM Acrylic support)
+- .NET Framework 4.0+ (included with Windows)
+- No NuGet, no Python, no Electron
+
+## Build
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-输出：`dist\CodexDashboard.exe`
+Output: `dist\CodexDashboard.exe`
 
-## 运行
+## Run
 
 ```powershell
 .\dist\CodexDashboard.exe
 ```
 
-## 设置
+The widget appears in the top-right corner. Drag anywhere to move. Right-click for menu.
 
-右键 → 设置... 可分别开关 Codex / MiniMax / DeepSeek 面板。
+## Provider Configuration
 
-- **Codex**：无需配置，自动读取本地 SQLite + app-server
-- **MiniMax**：需 mmx CLI 已安装 + 登录；可选填 Token Plan 订阅密钥
-- **DeepSeek**：填 API Key（platform.deepseek.com → API Keys），余额模式默认 autoThenManual
+Open **Settings** from the right-click menu.
 
-密钥不存 JSON，仅存 Windows 凭据管理器（`CodexDashboard.MiniMaxTokenPlan` / `CodexDashboard.DeepSeekApiKey`）。
+### Codex
 
-## 自测
+No configuration required. The dashboard reads:
+- Local token estimates from `%USERPROFILE%\.codex\state_5.sqlite`
+- Official quota from the Codex `app-server` JSON-RPC interface
 
-```powershell
-$csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-$netfx = "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.0"
-& $csc /nologo /target:exe /main:ProgramTests /out:.\dist\ProviderTests.exe /reference:System.Web.Extensions.dll /reference:"$netfx\System.Xaml.dll" /reference:"$netfx\WindowsBase.dll" /reference:"$netfx\PresentationCore.dll" /reference:"$netfx\PresentationFramework.dll" .\Program.cs .\ProgramTests.cs
-.\dist\ProviderTests.exe
-```
+### MiniMax
+
+- Requires `mmx` CLI installed and signed in
+- Optionally enter a **Token Plan subscription key** for the official remains API
+- The key is stored in Windows Credential Manager (`CodexDashboard.MiniMaxTokenPlan`), never in `settings.json`
+
+### DeepSeek
+
+- Enter your **API Key** (available at `platform.deepseek.com` → API Keys)
+- Choose a balance mode:
+  - `autoThenManual` — try the official API first; fall back to your manual balance on failure
+  - `officialOnly` — use only the official API; no fallback
+  - `manualOnly` — never make a network request
+- The key is stored in Windows Credential Manager (`CodexDashboard.DeepSeekApiKey`), never in `settings.json`
+
+## Data Sources
+
+| Provider | Source | Method |
+|---|---|---|
+| Codex (quota) | Local `codex app-server --stdio` | JSON-RPC `account/rateLimits/read` |
+| Codex (tokens) | `%USERPROFILE%\.codex\state_5.sqlite` | Read-only SQLite |
+| MiniMax (CLI) | `mmx quota show --output json` | Process + JSON parse |
+| MiniMax (API) | `minimaxi.com/v1/token_plan/remains` | HTTPS + Bearer token |
+| DeepSeek | `api.deepseek.com/user/balance` | HTTPS + Bearer token |
+
+Local token counts are **estimates only**. Official quota percentages are the source of truth for progress bars.
+
+## Credential Storage
+
+- **Settings**: `%APPDATA%\CodexDashboard\settings.json` (no secrets — only toggles, paths, and budget numbers)
+- **API Keys**: Windows Credential Manager (never written to disk as plaintext)
+
+## Privacy
+
+- No telemetry
+- No local SQLite data is uploaded
+- Network requests are made only to the official Provider APIs listed above — and only when the corresponding Provider is enabled
+- All data stays on your machine
+
+## Troubleshooting
+
+**Codex shows 0% or "quota unavailable"**
+- Ensure Codex CLI is installed (`codex --version`)
+- If installed via npm, the widget locates `%APPDATA%\npm\codex.cmd` automatically
+
+**MiniMax shows 0% or "not configured"**
+- Verify `mmx` CLI is installed and you are signed in (`mmx --version`)
+- If using the Token Plan API, confirm the subscription key is entered in Settings
+
+**DeepSeek shows no balance**
+- Verify your API Key is entered in Settings
+- Change the balance mode to `autoThenManual` and set a manual balance as fallback
+- Check your balance at `platform.deepseek.com`
+
+## Known Limitations
+
+- The status dot reflects refresh/quota availability; it is not yet a true hook-driven state indicator
+- Token usage is an approximate local-thread estimate
+- MiniMax `remains_time` display is suppressed when the API returns a raw numeric value with unconfirmed units
+- Glass effect depends on DWM support; some Windows builds may show a simpler translucent window
+
+## Roadmap
+
+- [x] Codex 5h + weekly quota
+- [x] Local SQLite token estimate
+- [x] MiniMax CLI + Token Plan API
+- [x] DeepSeek balance with manual/official fallback
+- [x] Provider source and stale-data tracking
+- [ ] Codex hook-driven status dot (working / approval needed / idle)
+- [ ] Configurable refresh interval in Settings UI
+- [ ] Window position persistence across restarts
+- [ ] Tray icon with minimize-to-tray
+
+---
+
+This project is **not affiliated with or endorsed by OpenAI, MiniMax, or DeepSeek**.
