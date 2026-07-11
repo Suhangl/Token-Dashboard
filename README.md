@@ -24,7 +24,9 @@ Right-click the widget → **Settings** to configure providers.
 - **Codex**: 5h + weekly quota via local `app-server` JSON-RPC; token estimate from SQLite
 - **MiniMax**: 5h + weekly percentage via `mmx` CLI or Token Plan remains API
 - **DeepSeek**: balance via official API with manual/official/fallback modes
-- Auto-refresh every 60s; status dot (green/yellow/red); position/size persisted on close
+- Embedded status dot · auto-refresh 60s · position persisted · DWM Acrylic glass
+- Color-coded resource bars: green (≥50%), yellow (20–49%), red (<20%)
+- History tracking with reset detection; burn ghost rendering upcoming
 
 ## Data Sources & Privacy
 

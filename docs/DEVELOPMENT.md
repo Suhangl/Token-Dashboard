@@ -83,6 +83,21 @@ $netfx = "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFr
 - 圆角半径可调（`settings.glass.cornerRadius`，默认 15）
 - 无手写渐变、无贴图 overlay
 
+## 复合资源条
+
+- 上层 5H（12px），下层 W（6px），紧凑标签
+- 颜色：绿 ≥50% / 黄 20-49% / 红 <20%（`BarColors.ForPercent`）
+- 历史样本缓存 `HistoryRing`（32 点 ring buffer），每次刷新写入
+- Reset 检测：当前值超过上一样本 2× 时清空历史
+- 残影渲染 `RenderGhosts` 已就绪（5m/20m/30m 三层），待下一轮接入 BuildUi
+- DeepSeek 保持单层条，使用相同颜色逻辑
+
+## 未来 Roadmap
+
+- [ ] 三层 burn ghost 渲染接入 UI
+- [ ] 24h / 30min bucket 趋势 sparkline
+- [ ] 请求次数历史趋势
+
 ## 不回归
 
 - 不加 Python 原型
