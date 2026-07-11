@@ -1,4 +1,4 @@
-# Codex Dashboard
+# Token Dashboard
 
 单文件 WPF 桌面悬浮组件，显示 Codex / MiniMax / DeepSeek 三平台用量。
 

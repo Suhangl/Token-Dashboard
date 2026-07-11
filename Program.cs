@@ -100,24 +100,28 @@ class QuotaSnapshot
     static int Clamp(int value) { return Math.Max(0, Math.Min(100, value)); }
 }
 
+enum ProviderSource { OfficialApi, Cli, Manual, LocalEstimate, Cached }
+
 class MiniMaxSnapshot
 {
     public readonly bool Available, IsStale;
     public readonly int FiveHourRemainingPercent, WeeklyRemainingPercent;
     public readonly DateTime LastSuccessAt;
     public readonly string Status, RemainsTime, WeeklyRemainsTime;
-    public MiniMaxSnapshot(bool available, int five, int week, bool stale, DateTime success, string status, string remainsTime = "", string weeklyRemainsTime = "")
-    { Available = available; FiveHourRemainingPercent = ProviderMath.ClampPercent(five); WeeklyRemainingPercent = ProviderMath.ClampPercent(week); IsStale = stale; LastSuccessAt = success; Status = status; RemainsTime = remainsTime ?? ""; WeeklyRemainsTime = weeklyRemainsTime ?? ""; }
+    public readonly ProviderSource Source;
+    public MiniMaxSnapshot(bool available, int five, int week, bool stale, DateTime success, string status, ProviderSource source, string remainsTime = "", string weeklyRemainsTime = "")
+    { Available = available; FiveHourRemainingPercent = ProviderMath.ClampPercent(five); WeeklyRemainingPercent = ProviderMath.ClampPercent(week); IsStale = stale; LastSuccessAt = success; Status = status; Source = source; RemainsTime = remainsTime ?? ""; WeeklyRemainsTime = weeklyRemainsTime ?? ""; }
 }
 
 class DeepSeekSnapshot
 {
-    public readonly bool Available, IsStale, IsManual;
+    public readonly bool Available, IsStale;
     public readonly decimal TotalBalance, GrantedBalance, ToppedUpBalance;
     public readonly string Currency, Status;
     public readonly DateTime LastSuccessAt;
-    public DeepSeekSnapshot(bool available, decimal total, decimal granted, decimal toppedUp, string currency, bool stale, bool manual, DateTime success, string status)
-    { Available = available; TotalBalance = total; GrantedBalance = granted; ToppedUpBalance = toppedUp; Currency = currency ?? "CNY"; IsStale = stale; IsManual = manual; LastSuccessAt = success; Status = status; }
+    public readonly ProviderSource Source;
+    public DeepSeekSnapshot(bool available, decimal total, decimal granted, decimal toppedUp, string currency, bool stale, DateTime success, string status, ProviderSource source)
+    { Available = available; TotalBalance = total; GrantedBalance = granted; ToppedUpBalance = toppedUp; Currency = currency ?? "CNY"; IsStale = stale; LastSuccessAt = success; Status = status; Source = source; }
 }
 
 static class ProviderMath
@@ -180,7 +184,17 @@ class DashboardSettings
         if (settings.deepseek.pricesPerMillionTokens == null) settings.deepseek.pricesPerMillionTokens = DeepSeekSettings.DefaultPrices();
         if (settings.glass == null) settings.glass = new GlassSettings();
         if (settings.refreshSeconds < 15) settings.refreshSeconds = 60;
+        settings.deepseek.balanceMode = NormalizeBalanceMode(settings.deepseek.balanceMode);
         return settings;
+    }
+
+    public static string NormalizeBalanceMode(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "autoThenManual";
+        if (raw.StartsWith("autoThenManual", StringComparison.OrdinalIgnoreCase)) return "autoThenManual";
+        if (raw.StartsWith("officialOnly", StringComparison.OrdinalIgnoreCase)) return "officialOnly";
+        if (raw.StartsWith("manualOnly", StringComparison.OrdinalIgnoreCase)) return "manualOnly";
+        return "autoThenManual";
     }
     public void Save()
     {
@@ -225,32 +239,35 @@ static class MiniMaxQuota
             object a, b, name; bool hasA = row.TryGetValue("current_interval_remaining_percent", out a), hasB = row.TryGetValue("current_weekly_remaining_percent", out b);
             if (!hasA || !hasB) continue;
             string model = row.TryGetValue("model_name", out name) ? Convert.ToString(name) : "";
-            if (Matches(model, requestedModel)) return Snapshot(row, a, b, "MiniMax CLI");
+            if (Matches(model, requestedModel)) return Snapshot(row, a, b, "MiniMax CLI", "CLI");
             if (fallback == null && IsLanguagePlan(model)) fallback = row;
         }
-        if (fallback != null) return Snapshot(fallback, fallback["current_interval_remaining_percent"], fallback["current_weekly_remaining_percent"], "MiniMax CLI fallback plan");
+        if (fallback != null) return Snapshot(fallback, fallback["current_interval_remaining_percent"], fallback["current_weekly_remaining_percent"], "MiniMax CLI fallback plan", "CLI");
         throw new Exception("MiniMax language plan was not found");
     }
-    static MiniMaxSnapshot Snapshot(Dictionary<string, object> row, object five, object week, string status)
+    static MiniMaxSnapshot Snapshot(Dictionary<string, object> row, object five, object week, string status, string timeSource)
     {
         object remains, weeklyRemains; row.TryGetValue("remains_time", out remains); row.TryGetValue("weekly_remains_time", out weeklyRemains);
-        return new MiniMaxSnapshot(true, Convert.ToInt32(Math.Round(Convert.ToDecimal(five))), Convert.ToInt32(Math.Round(Convert.ToDecimal(week))), false, DateTime.Now, status, FormatMiniMaxTime(remains), FormatMiniMaxTime(weeklyRemains));
+        return new MiniMaxSnapshot(true, Convert.ToInt32(Math.Round(Convert.ToDecimal(five))), Convert.ToInt32(Math.Round(Convert.ToDecimal(week))), false, DateTime.Now, status, ProviderSource.Cli, MiniMaxTime.Format(remains, timeSource), MiniMaxTime.Format(weeklyRemains, timeSource));
     }
 
-    static string FormatMiniMaxTime(object raw)
+    // Called from MiniMaxRemainsApi (API source): value is raw numeric, unit unconfirmed → "--"
+    static MiniMaxSnapshot Snapshot(Dictionary<string, object> row, object five, object week, string status)
     {
-        if (raw == null) return "";
-        string s = Convert.ToString(raw);
-        long val;
-        if (!long.TryParse(s, out val)) return s; // already human-readable
-        long sec;
-        if (val > 10000000) sec = val / 1000;      // milliseconds (13M ms = 3.7h)
-        else if (val > 100000) sec = val;           // seconds
-        else sec = val * 60;                        // minutes
-        if (sec <= 0) return "now";
-        if (sec < 60) return sec + "s";
-        if (sec < 3600) return (sec / 60) + "m " + (sec % 60) + "s";
-        return (sec / 3600) + "h " + ((sec % 3600) / 60) + "m";
+        return Snapshot(row, five, week, status, "API");
+    }
+
+    public static class MiniMaxTime
+    {
+        public static string Format(object raw, string source)
+        {
+            if (raw == null) return "";
+            string s = Convert.ToString(raw);
+            long val;
+            if (!long.TryParse(s, out val)) return s; // already human-readable — pass through
+            // Raw numeric with unknown unit — suppress display
+            return "";
+        }
     }
     static void Walk(object value, List<Dictionary<string, object>> rows)
     {
@@ -312,7 +329,7 @@ static class MiniMaxRemainsApi
             using (StreamReader reader = new StreamReader(response.GetResponseStream()))
             {
                 MiniMaxSnapshot result = MiniMaxQuota.Parse(reader.ReadToEnd(), modelName);
-                return new MiniMaxSnapshot(result.Available, result.FiveHourRemainingPercent, result.WeeklyRemainingPercent, false, result.LastSuccessAt, "MiniMax Token Plan remains API", result.RemainsTime, result.WeeklyRemainsTime);
+                return new MiniMaxSnapshot(result.Available, result.FiveHourRemainingPercent, result.WeeklyRemainingPercent, false, result.LastSuccessAt, "MiniMax Token Plan remains API", ProviderSource.OfficialApi, result.RemainsTime, result.WeeklyRemainsTime);
             }
         }
         catch { throw new Exception("MiniMax Token Plan remains API failed"); }
@@ -365,7 +382,7 @@ static class DeepSeekBalance
         {
             Dictionary<string, object> row = value as Dictionary<string, object>; if (row == null) continue;
             if (!string.Equals(GetString(row, "currency"), desired, StringComparison.OrdinalIgnoreCase)) continue;
-            return new DeepSeekSnapshot(true, GetDecimal(row, "total_balance"), GetDecimal(row, "granted_balance"), GetDecimal(row, "topped_up_balance"), desired, false, false, DateTime.Now, "DeepSeek official balance");
+            return new DeepSeekSnapshot(true, GetDecimal(row, "total_balance"), GetDecimal(row, "granted_balance"), GetDecimal(row, "topped_up_balance"), desired, false, DateTime.Now, "DeepSeek official balance", ProviderSource.OfficialApi);
         }
         throw new Exception("DeepSeek requested currency was not found");
     }
@@ -433,7 +450,6 @@ static class CodexAppServerQuota
         string exe = FindCodexExe();
         string fileName = exe;
         string args = "app-server --stdio";
-        // Wrap .cmd/.bat through cmd.exe (same pattern as MiniMaxQuota)
         if (exe.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || exe.EndsWith(".bat", StringComparison.OrdinalIgnoreCase))
         {
             fileName = "cmd.exe";
@@ -445,25 +461,54 @@ static class CodexAppServerQuota
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CODEX_HOME")))
             psi.EnvironmentVariables["CODEX_HOME"] = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
 
-        using (Process p = new Process())
+        Process p = null;
+        AutoResetEvent got = null;
+        string response = null, error = "";
+        try
         {
+            p = new Process(); got = new AutoResetEvent(false);
             p.StartInfo = psi;
-            string response = null, error = "";
-            AutoResetEvent got = new AutoResetEvent(false);
-            p.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null && e.Data.IndexOf("\"id\":2", StringComparison.OrdinalIgnoreCase) >= 0) { response = e.Data; got.Set(); } };
+            p.OutputDataReceived += delegate(object s, DataReceivedEventArgs e)
+            {
+                if (e.Data == null) return;
+                int? id = ParseJsonRpcId(e.Data);
+                if (id.HasValue && id.Value == 2) { response = e.Data; got.Set(); }
+            };
             p.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) error += e.Data + "\n"; };
-            if (!p.Start()) throw new Exception("failed to start codex app-server");
+            if (!p.Start()) throw new Exception("codex app-server failed to start");
             p.BeginOutputReadLine(); p.BeginErrorReadLine();
             p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-dashboard\",\"version\":\"1\"},\"capabilities\":{\"experimentalApi\":true,\"requestAttestation\":false,\"optOutNotificationMethods\":[]}}}");
             p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
             p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}");
             p.StandardInput.Flush();
-            if (!got.WaitOne(15000)) throw new Exception("quota timeout " + error.Trim());
-            try { if (!p.HasExited) p.Kill(); } catch { }
+            if (!got.WaitOne(15000)) throw new Exception("quota timeout");
             QuotaSnapshot quota = Parse(response);
             if (quota == null) throw new Exception("quota missing 5h/week values");
             return quota;
         }
+        finally
+        {
+            if (got != null) { try { got.Dispose(); } catch { } }
+            if (p != null)
+            {
+                try { p.StandardInput.Close(); } catch { }
+                try { if (!p.HasExited) { p.Kill(); p.WaitForExit(3000); } } catch { }
+                try { p.Dispose(); } catch { }
+            }
+        }
+    }
+
+    public static int? ParseJsonRpcId(string line)
+    {
+        try
+        {
+            Dictionary<string, object> obj = new JavaScriptSerializer().DeserializeObject(line) as Dictionary<string, object>;
+            if (obj == null) return null;
+            object idObj;
+            if (!obj.TryGetValue("id", out idObj)) return null;
+            return Convert.ToInt32(idObj);
+        }
+        catch { return null; }
     }
 
     static QuotaSnapshot Parse(string text)
@@ -525,8 +570,8 @@ class LiquidWindow : Window
 
     UsageSnapshot usage = new UsageSnapshot(false, 0, 0, 0, 0, "starting");
     QuotaSnapshot quota = new QuotaSnapshot(false, 0, 0, "starting", null, null);
-    MiniMaxSnapshot minimax = new MiniMaxSnapshot(false, 0, 0, false, DateTime.MinValue, "not configured");
-    DeepSeekSnapshot deepseek = new DeepSeekSnapshot(false, 0m, 0m, 0m, "CNY", false, false, DateTime.MinValue, "not configured");
+    MiniMaxSnapshot minimax = new MiniMaxSnapshot(false, 0, 0, false, DateTime.MinValue, "not configured", ProviderSource.Cached);
+    DeepSeekSnapshot deepseek = new DeepSeekSnapshot(false, 0m, 0m, 0m, "CNY", false, DateTime.MinValue, "not configured", ProviderSource.Cached);
     DashboardSettings settings;
     DateTime nextRefreshAt = DateTime.Now, lastRefreshAt = DateTime.MinValue;
     bool codexBusy, minimaxBusy, deepseekBusy;
@@ -719,7 +764,7 @@ class LiquidWindow : Window
         CheckBox deepEnabled = Check("启用", candidate.deepseek.enabled); panel.Children.Add(deepEnabled);
         bool hasDeepKey = !string.IsNullOrEmpty(WindowsCredentialStore.Read("CodexDashboard.DeepSeekApiKey"));
         PasswordBox deepApiKey = SecretField(panel, "API Key" + (hasDeepKey ? "（已保存）" : "（未设置）"));
-        ComboBox mode = Choice(panel, "余额来源", new[] { "autoThenManual（优先 API，失败用手动）", "officialOnly（仅 API）", "manualOnly（仅手动）" }, candidate.deepseek.balanceMode);
+        ComboBox mode = Choice(panel, "余额来源", new[] { "autoThenManual", "officialOnly", "manualOnly" }, candidate.deepseek.balanceMode);
         ComboBox currency = Choice(panel, "货币", new[] { "CNY", "USD" }, candidate.deepseek.currency);
         TextBox manual = Field(panel, "手动余额（API 不可用时回退）", candidate.deepseek.manualBalance.ToString("0.####"));
         TextBox budget = Field(panel, "预算上限（满额参考值）", candidate.deepseek.referenceBudget.ToString("0.####"));
@@ -739,7 +784,7 @@ class LiquidWindow : Window
             { MessageBox.Show(dialog, "DeepSeek API Key 保存失败。", "设置", MessageBoxButton.OK, MessageBoxImage.Error); return; }
             candidate.codex.enabled = codexEnabled.IsChecked == true;
             candidate.minimax.enabled = miniEnabled.IsChecked == true; candidate.minimax.mmxPath = mmxPath.Text.Trim(); candidate.minimax.quotaModelName = miniModel.Text.Trim();
-            candidate.deepseek.enabled = deepEnabled.IsChecked == true; candidate.deepseek.balanceMode = Convert.ToString(mode.SelectedItem); candidate.deepseek.currency = Convert.ToString(currency.SelectedItem); candidate.deepseek.manualBalance = manualValue; candidate.deepseek.referenceBudget = budgetValue;
+            candidate.deepseek.enabled = deepEnabled.IsChecked == true; candidate.deepseek.balanceMode = DashboardSettings.NormalizeBalanceMode(Convert.ToString(mode.SelectedItem)); candidate.deepseek.currency = Convert.ToString(currency.SelectedItem); candidate.deepseek.manualBalance = manualValue; candidate.deepseek.referenceBudget = budgetValue;
             try { candidate.Save(); } catch { MessageBox.Show(dialog, "设置保存失败，请检查磁盘权限。", "设置", MessageBoxButton.OK, MessageBoxImage.Error); return; }
             settings = candidate; Height = DesiredHeight(); Content = BuildUi(); ApplyPercentEffects(); StartRefresh(); dialog.Close();
         };
@@ -824,7 +869,7 @@ class LiquidWindow : Window
         {
             MiniMaxSnapshot next;
             try { next = MiniMaxQuota.Fetch(settings.minimax); }
-            catch (Exception ex) { next = new MiniMaxSnapshot(minimax.Available, minimax.FiveHourRemainingPercent, minimax.WeeklyRemainingPercent, minimax.Available, minimax.LastSuccessAt, SafeProviderError(ex)); }
+            catch (Exception ex) { next = new MiniMaxSnapshot(minimax.Available, minimax.FiveHourRemainingPercent, minimax.WeeklyRemainingPercent, minimax.Available, minimax.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
             Dispatcher.BeginInvoke(new Action(delegate { minimax = next; minimaxBusy = false; Render(); }));
         });
     }
@@ -841,11 +886,11 @@ class LiquidWindow : Window
             if (allowOfficial && !string.IsNullOrWhiteSpace(key))
             {
                 try { next = DeepSeekBalance.Fetch(key, settings.deepseek.currency); }
-                catch (Exception ex) { if (string.Equals(settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase)) next = new DeepSeekSnapshot(deepseek.Available, deepseek.TotalBalance, deepseek.GrantedBalance, deepseek.ToppedUpBalance, deepseek.Currency, deepseek.Available, deepseek.IsManual, deepseek.LastSuccessAt, SafeProviderError(ex)); }
+                catch (Exception ex) { if (string.Equals(settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase)) next = new DeepSeekSnapshot(deepseek.Available, deepseek.TotalBalance, deepseek.GrantedBalance, deepseek.ToppedUpBalance, deepseek.Currency, deepseek.Available, deepseek.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
             }
             if (next == null && !string.Equals(settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase))
-                next = new DeepSeekSnapshot(true, settings.deepseek.manualBalance, 0m, settings.deepseek.manualBalance, settings.deepseek.currency, false, true, DateTime.Now, "DeepSeek manual balance");
-            if (next == null) next = new DeepSeekSnapshot(deepseek.Available, deepseek.TotalBalance, deepseek.GrantedBalance, deepseek.ToppedUpBalance, deepseek.Currency, deepseek.Available, deepseek.IsManual, deepseek.LastSuccessAt, "DeepSeek API key is not available");
+                next = new DeepSeekSnapshot(true, settings.deepseek.manualBalance, 0m, settings.deepseek.manualBalance, settings.deepseek.currency, false, DateTime.Now, "DeepSeek manual balance", ProviderSource.Manual);
+            if (next == null) next = new DeepSeekSnapshot(deepseek.Available, deepseek.TotalBalance, deepseek.GrantedBalance, deepseek.ToppedUpBalance, deepseek.Currency, deepseek.Available, deepseek.LastSuccessAt, "DeepSeek API key is not available", ProviderSource.Cached);
             Dispatcher.BeginInvoke(new Action(delegate { deepseek = next; deepseekBusy = false; Render(); }));
         });
     }
@@ -886,7 +931,7 @@ class LiquidWindow : Window
             deepSeekUsed.Text = deepseek.Available ? CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
             decimal estimatedCost = EstimateCost();
             string estimate = estimatedCost > 0m && deepseek.TotalBalance >= 0m ? "\nAbout " + Math.Floor(deepseek.TotalBalance / estimatedCost).ToString("0") + " configured tasks" : "";
-            string deepTip = "Balance: " + CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + CurrencySymbol(deepseek.Currency) + settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.IsManual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
+            string deepTip = "Balance: " + CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + CurrencySymbol(deepseek.Currency) + settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
             deepSeekHeading.ToolTip = deepTip; deepSeekPercent.ToolTip = deepTip; deepSeekUsed.ToolTip = deepTip;
         }
         if (settings.codex.enabled)

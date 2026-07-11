@@ -2,31 +2,43 @@
 
 ## 架构
 
-单文件 WPF (`Program.cs`，~1032 行)，`csc.exe` 编译，零外部依赖。
+单文件 WPF (`Program.cs`，~1078 行)，`csc.exe` 编译，零外部依赖。
 
 ```
 Program.cs
-├── static class NativeSqlite          — SQLite 只读，state_5.sqlite
-├── class UsageSnapshot               — Codex token 估算
-├── class QuotaSnapshot               — Codex 配额快照
-├── class MiniMaxSnapshot             — MiniMax 配额快照
-├── class DeepSeekSnapshot            — DeepSeek 余额快照
-├── static class ProviderMath         — 百分比/成本计算
-├── class DashboardSettings           — JSON 设置读写
-├── class MiniMaxCommand              — CLI 命令模型
-├── static class MiniMaxQuota         — mmx CLI 调用 + 解析
-├── static class MiniMaxRemainsApi    — Token Plan API
+├── enum ProviderSource              — OfficialApi/Cli/Manual/LocalEstimate/Cached
+├── static class NativeSqlite        — SQLite 只读，state_5.sqlite
+├── class UsageSnapshot             — Codex token 估算
+├── class QuotaSnapshot             — Codex 配额快照
+├── class MiniMaxSnapshot           — MiniMax 配额快照（含 Source + RemainsTime）
+├── class DeepSeekSnapshot          — DeepSeek 余额快照（含 Source）
+├── static class ProviderMath       — 百分比/成本计算
+├── class DashboardSettings         — JSON 设置读写 + balanceMode 归一化
+├── class MiniMaxCommand            — CLI 命令模型
+├── static class MiniMaxQuota       — mmx CLI 调用 + 解析
+│   └── static class MiniMaxTime    — 时间格式化（分 CLI/API 源）
+├── static class MiniMaxRemainsApi  — Token Plan API
 ├── static class WindowsCredentialStore — advapi32 凭据读写
-├── static class DeepSeekBalance      — api.deepseek.com/user/balance
+├── static class DeepSeekBalance    — api.deepseek.com/user/balance
 ├── class ProcessResult / ProcessRunner — 进程包装
-├── static class CodexAppServerQuota  — codex app-server JSON-RPC
-└── class LiquidWindow : Window       — WPF 主窗口
-    ├── BuildUi()    — 布局构建
-    ├── Render()     — 数据刷新
-    ├── StartRefresh() / RefreshCodex() / RefreshMiniMax() / RefreshDeepSeek()
-    ├── ShowProviderSettings() — 设置对话框
-    └── EnableSystemGlass()   — DWM Acrylic
+├── static class CodexAppServerQuota — codex app-server JSON-RPC（finally 清理 + JSON id 解析）
+└── class LiquidWindow : Window     — WPF 主窗口
 ```
+
+## Provider source 和 stale 模型
+
+每个 Provider 快照携带 `ProviderSource`：
+- `OfficialApi` — 官方 API 实时数据
+- `Cli` — 命令行工具输出
+- `Manual` — 用户手动输入值
+- `Cached` — 上次成功值的缓存（IsStale=true）
+
+刷新失败时保留旧值并标记 IsStale=true，不清空。
+
+## DeepSeek balanceMode 规范值
+
+内部仅允许三个值：`autoThenManual`、`officialOnly`、`manualOnly`。
+设置 UI 使用内部值；`NormalizeBalanceMode()` 兼容旧带中文描述的配置。
 
 ## 数据源
 
