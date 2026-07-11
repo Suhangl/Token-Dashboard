@@ -33,6 +33,8 @@ Output: `dist\CodexDashboard.exe`
 
 ## Run
 
+不需要安装，直接双击 `dist\CodexDashboard.exe` 运行。
+
 ```powershell
 .\dist\CodexDashboard.exe
 ```
