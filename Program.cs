@@ -735,10 +735,8 @@ class LiquidWindow : Window
             codexHeading = AddSectionHeader(grid, row++, "CODEX");
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
             AddDivider(grid, row++);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "5H", out fivePercent, out fiveUsed, out fiveTrack, out fiveFill, 12);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(46) });
-            AddMeter(grid, row++, "W", out weekPercent, out weekUsed, out weekTrack, out weekFill, 6);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(55) });
+            AddCompositeBar(grid, row++, out fivePercent, out fiveUsed, out fiveTrack, out fiveFill, out weekPercent, out weekUsed, out weekTrack, out weekFill);
         }
 
         // ===== MINIMAX section =====
@@ -750,10 +748,8 @@ class LiquidWindow : Window
             miniHeading = AddSectionHeader(grid, row++, "MINIMAX");
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
             AddDivider(grid, row++);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "5H", out miniFivePercent, out miniFiveUsed, out miniFiveTrack, out miniFiveFill, 12);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(46) });
-            AddMeter(grid, row++, "W", out miniWeekPercent, out miniWeekUsed, out miniWeekTrack, out miniWeekFill, 6);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(55) });
+            AddCompositeBar(grid, row++, out miniFivePercent, out miniFiveUsed, out miniFiveTrack, out miniFiveFill, out miniWeekPercent, out miniWeekUsed, out miniWeekTrack, out miniWeekFill);
         }
 
         // ===== DEEPSEEK section =====
@@ -799,8 +795,8 @@ class LiquidWindow : Window
     double DesiredHeight()
     {
         double h = 62; // header (24) + footer (38)
-        if (settings != null && settings.codex.enabled) h += 17 + 3 + 42 + 42;
-        if (settings != null && settings.minimax.enabled) h += (settings.codex.enabled ? 10 : 4) + 17 + 3 + 42 + 42;
+        if (settings != null && settings.codex.enabled) h += 17 + 3 + 55;
+        if (settings != null && settings.minimax.enabled) h += 10 + 17 + 3 + 55;
         if (settings != null && settings.deepseek.enabled) h += ((settings.codex.enabled || settings.minimax.enabled) ? 10 : 4) + 17 + 3 + 42;
         return h + 30; // grid margin (16+14)
     }
@@ -864,7 +860,51 @@ class LiquidWindow : Window
     static ComboBox Choice(StackPanel parent, string label, string[] values, string selected) { parent.Children.Add(new TextBlock { Text = label, Opacity = 0.72, Margin = new Thickness(0, 7, 0, 2) }); ComboBox box = new ComboBox { Padding = new Thickness(4, 2, 4, 2) }; foreach (string value in values) box.Items.Add(value); box.SelectedItem = Array.IndexOf(values, selected) >= 0 ? selected : values[0]; parent.Children.Add(box); return box; }
     static bool TryDecimal(string text, out decimal value) { return decimal.TryParse(text, out value) || decimal.TryParse(text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out value); }
 
-    void AddMeter(Grid parent, int row, string label, out TextBlock percent, out TextBlock used, out Border track, out Border fill, int barH = 5)
+    void AddCompositeBar(Grid parent, int row, out TextBlock fivePct, out TextBlock fiveUsed, out Border fiveTrack, out Border fiveFill,
+                         out TextBlock weekPct, out TextBlock weekUsed, out Border weekTrack, out Border weekFill)
+    {
+        Grid block = new Grid();
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+        block.ColumnDefinitions.Add(new ColumnDefinition());
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });   // 5H text
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });    // 5H bar
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });    // W bar
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(18) });   // W text
+
+        // 5H text row
+        TextBlock fLabel = Text("5H", 13, 0, 232, 240, 250, FontWeights.SemiBold);
+        fivePct = Text("--", 14, 0, 248, 251, 255, FontWeights.Bold); fivePct.HorizontalAlignment = HorizontalAlignment.Right;
+        fiveUsed = Text("", 10, 0, 145, 160, 182, FontWeights.Normal); fiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(fiveUsed, 2); Grid.SetColumn(fivePct, 3);
+        Grid.SetRow(fLabel, 0); Grid.SetRow(fiveUsed, 0); Grid.SetRow(fivePct, 0);
+        block.Children.Add(fLabel); block.Children.Add(fiveUsed); block.Children.Add(fivePct);
+
+        // 5H bar
+        fiveTrack = BarTrack(8); fiveFill = BarFill(8);
+        Grid bar5 = new Grid(); bar5.Children.Add(fiveTrack); bar5.Children.Add(fiveFill);
+        Grid.SetRow(bar5, 1); Grid.SetColumnSpan(bar5, 4); block.Children.Add(bar5);
+
+        // W bar
+        weekTrack = BarTrack(4); weekFill = BarFill(4);
+        Grid barW = new Grid(); barW.Children.Add(weekTrack); barW.Children.Add(weekFill);
+        Grid.SetRow(barW, 2); Grid.SetColumnSpan(barW, 4); block.Children.Add(barW);
+
+        // W text row
+        TextBlock wLabel = Text("W", 11, 0, 170, 184, 204, FontWeights.Normal);
+        weekPct = Text("--", 12, 0, 210, 220, 230, FontWeights.Bold); weekPct.HorizontalAlignment = HorizontalAlignment.Right;
+        weekUsed = Text("", 10, 0, 145, 160, 182, FontWeights.Normal); weekUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(weekUsed, 2); Grid.SetColumn(weekPct, 3);
+        Grid.SetRow(wLabel, 3); Grid.SetRow(weekUsed, 3); Grid.SetRow(weekPct, 3);
+        block.Children.Add(wLabel); block.Children.Add(weekUsed); block.Children.Add(weekPct);
+
+        Grid.SetRow(block, row); parent.Children.Add(block);
+    }
+    Border BarTrack(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromArgb(50, 80, 90, 110)), VerticalAlignment = VerticalAlignment.Top }; }
+    Border BarFill(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top }; }
+
+    void AddMeter(Grid parent, int row, string label, out TextBlock pct, out TextBlock used, out Border track, out Border fill, int barH = 6)
     {
         Grid line = new Grid();
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
@@ -872,18 +912,17 @@ class LiquidWindow : Window
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
         line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
-        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(barH + 6) });
+        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(barH + 4) });
 
-        TextBlock labelText = Text(label, 15, 0, 232, 240, 250, FontWeights.SemiBold);
-        percent = Text("--", 16, 0, 248, 251, 255, FontWeights.Bold); percent.HorizontalAlignment = HorizontalAlignment.Right;
-        used = Text("", 11, 0, 145, 160, 182, FontWeights.Normal); used.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(used, 2); Grid.SetColumn(percent, 3);
-        line.Children.Add(labelText); line.Children.Add(used); line.Children.Add(percent);
+        TextBlock lt = Text(label, 13, 0, 232, 240, 250, FontWeights.SemiBold);
+        pct = Text("--", 14, 0, 248, 251, 255, FontWeights.Bold); pct.HorizontalAlignment = HorizontalAlignment.Right;
+        used = Text("", 10, 0, 145, 160, 182, FontWeights.Normal); used.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(used, 2); Grid.SetColumn(pct, 3);
+        line.Children.Add(lt); line.Children.Add(used); line.Children.Add(pct);
 
-        track = new Border { Height = barH, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromArgb(60, 90, 100, 120)), VerticalAlignment = VerticalAlignment.Center };
-        fill = new Border { Height = barH, CornerRadius = new CornerRadius(3), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
-        Grid barGrid = new Grid(); barGrid.Children.Add(track); barGrid.Children.Add(fill);
-        Grid.SetRow(barGrid, 1); Grid.SetColumnSpan(barGrid, 4); line.Children.Add(barGrid);
+        track = BarTrack(barH); fill = BarFill(barH);
+        Grid bg = new Grid(); bg.Children.Add(track); bg.Children.Add(fill);
+        Grid.SetRow(bg, 1); Grid.SetColumnSpan(bg, 4); line.Children.Add(bg);
 
         Grid.SetRow(line, row); parent.Children.Add(line);
     }
