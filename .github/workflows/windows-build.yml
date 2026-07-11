@@ -10,7 +10,10 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Build widget
         shell: powershell
@@ -45,6 +48,11 @@ jobs:
       - name: Check for whitespace issues
         shell: powershell
         run: |
-          git diff --check HEAD~1..HEAD 2>&1 | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Whitespace issues found" }
-          Write-Host "No whitespace issues"
+          $parent = (git rev-parse HEAD~1 2>$null) -replace '\s',''
+          if ($parent) {
+            git diff --check "$parent..HEAD"
+            if ($LASTEXITCODE -ne 0) { throw "Whitespace issues found in diff" }
+            Write-Host "No whitespace issues"
+          } else {
+            Write-Host "Skipping whitespace check (no parent commit)"
+          }
