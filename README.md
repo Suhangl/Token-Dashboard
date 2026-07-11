@@ -3,6 +3,8 @@
 
 Single-file WPF desktop widget for monitoring **Codex**, **MiniMax**, and **DeepSeek** token quotas, balances, and local usage estimates. Zero dependencies beyond .NET Framework 4.0+ (built into Windows).
 
+![screenshot](docs/screenshot.png)
+
 ## License
 
 **All rights reserved.** Not open-source. No license granted.
