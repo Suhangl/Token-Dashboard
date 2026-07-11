@@ -173,11 +173,18 @@ class HistoryRing
 
 static class BarColors
 {
-    public static Color ForPercent(int p)
+    public static Color ForPercent(int p, double sat = 1.0)
     {
-        if (p >= 50) return Color.FromRgb(74, 222, 128);
-        if (p >= 20) return Color.FromRgb(245, 180, 55);
-        return Color.FromRgb(236, 83, 83);
+        Color c;
+        if (p >= 50) c = Color.FromRgb(74, 222, 128);
+        else if (p >= 20) c = Color.FromRgb(245, 180, 55);
+        else c = Color.FromRgb(236, 83, 83);
+        if (sat >= 1.0) return c;
+        byte g = 128;
+        return Color.FromRgb(
+            (byte)(c.R * sat + g * (1 - sat)),
+            (byte)(c.G * sat + g * (1 - sat)),
+            (byte)(c.B * sat + g * (1 - sat)));
     }
     public static Color BurnGhost(Color baseColor, int level)
     {
@@ -1023,8 +1030,8 @@ class LiquidWindow : Window
             weekPercent.Text = quota.Available ? quota.WeeklyRemainingPercent + "%" : "--";
             weekUsed.Text = FormatTokens(usage.WeekTokens);
             fiveUsed.Text = "resets " + FormatResetCountdown(quota.FiveHourResetsAt);
-            UpdateMeter(fiveFill, fiveTrack, quota.Available, quota.FiveHourRemainingPercent, Color.FromRgb(74, 222, 128));
-            UpdateMeter(weekFill, weekTrack, quota.Available, quota.WeeklyRemainingPercent, Color.FromRgb(74, 222, 128));
+            UpdateMeter(fiveFill, fiveTrack, quota.Available, quota.FiveHourRemainingPercent, 1.0);
+            UpdateMeter(weekFill, weekTrack, quota.Available, quota.WeeklyRemainingPercent, 0.55);
         }
         if (settings.minimax.enabled)
         {
@@ -1032,8 +1039,8 @@ class LiquidWindow : Window
             miniWeekPercent.Text = minimax.Available ? minimax.WeeklyRemainingPercent + "%" : "--";
             miniFiveUsed.Text = !string.IsNullOrEmpty(minimax.RemainsTime) ? "resets " + minimax.RemainsTime : "";
             miniWeekUsed.Text = "";
-            UpdateMeter(miniFiveFill, miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent, Color.FromRgb(74, 222, 128));
-            UpdateMeter(miniWeekFill, miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent, Color.FromRgb(74, 222, 128));
+            UpdateMeter(miniFiveFill, miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent, 1.0);
+            UpdateMeter(miniWeekFill, miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent, 0.55);
             string miniTip = (minimax.IsStale ? "Stale: " : "") + minimax.Status;
             if (!string.IsNullOrEmpty(minimax.RemainsTime)) miniTip += "\n5h: " + minimax.RemainsTime;
             miniHeading.ToolTip = miniTip; miniFivePercent.ToolTip = miniTip; miniWeekPercent.ToolTip = miniTip;
@@ -1043,7 +1050,7 @@ class LiquidWindow : Window
             int? balancePercent = ProviderMath.RemainingPercent(deepseek.TotalBalance, settings.deepseek.referenceBudget);
             deepSeekPercent.Text = (deepseek.Available && balancePercent.HasValue) ? balancePercent.Value + "%" : "--";
             deepSeekUsed.Text = deepseek.Available ? CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
-            UpdateMeter(deepSeekFill, deepSeekTrack, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault(), Color.FromRgb(74, 222, 128));
+            UpdateMeter(deepSeekFill, deepSeekTrack, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault());
             decimal estimatedCost = EstimateCost();
             string estimate = estimatedCost > 0m && deepseek.TotalBalance >= 0m ? "\nAbout " + Math.Floor(deepseek.TotalBalance / estimatedCost).ToString("0") + " configured tasks" : "";
             string deepTip = "Balance: " + CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + CurrencySymbol(deepseek.Currency) + settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
@@ -1072,9 +1079,9 @@ class LiquidWindow : Window
 
     static string CurrencySymbol(string currency) { return string.Equals(currency, "CNY", StringComparison.OrdinalIgnoreCase) ? "\u00a5" : string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : (currency ?? "") + " "; }
 
-    void UpdateMeter(Border fill, Border track, bool available, int remaining, Color accent)
+    void UpdateMeter(Border fill, Border track, bool available, int remaining, double sat = 1.0)
     {
-        Color fillColor = available ? BarColors.ForPercent(remaining) : Color.FromRgb(100, 100, 110);
+        Color fillColor = available ? BarColors.ForPercent(remaining, sat) : Color.FromRgb(100, 100, 110);
         fill.Background = new LinearGradientBrush(
             new GradientStopCollection {
                 new GradientStop(Color.FromArgb(130, 255, 255, 255), 0),
