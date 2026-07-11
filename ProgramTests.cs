@@ -20,7 +20,7 @@ static class ProgramTests
 
         // MiniMax time: string passes through, raw numeric suppressed
         Expect(MiniMaxQuota.MiniMaxTime.Format("2h 34m", "CLI") == "2h 34m", "MiniMax time string pass-through");
-        Expect(MiniMaxQuota.MiniMaxTime.Format("13317783", "API") == "", "MiniMax raw numeric suppressed for API");
+        Expect(MiniMaxQuota.MiniMaxTime.Format("13317783", "API") == "3h 41m", "MiniMax converts ms to readable");
         Expect(MiniMaxQuota.MiniMaxTime.Format(null, "CLI") == "", "MiniMax null time returns empty");
 
         // Test .cmd wrapper — path does not need to exist on disk

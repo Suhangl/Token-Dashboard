@@ -312,8 +312,12 @@ static class MiniMaxQuota
             string s = Convert.ToString(raw);
             long val;
             if (!long.TryParse(s, out val)) return s; // already human-readable — pass through
-            // Raw numeric with unknown unit — suppress display
-            return "";
+            // Convert numeric: > 1M = milliseconds, otherwise seconds
+            long sec = val > 1000000 ? val / 1000 : val;
+            if (sec <= 0) return "";
+            if (sec < 60) return sec + "s";
+            if (sec < 3600) return (sec / 60) + "m " + (sec % 60) + "s";
+            return (sec / 3600) + "h " + ((sec % 3600) / 60) + "m";
         }
     }
     static void Walk(object value, List<Dictionary<string, object>> rows)
