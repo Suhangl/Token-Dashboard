@@ -141,6 +141,51 @@ static class ProviderMath
     }
 }
 
+class HistoryPoint { public DateTime At; public int Percent; public HistoryPoint(DateTime at, int p) { At = at; Percent = p; } }
+
+class HistoryRing
+{
+    HistoryPoint[] buf; int head, count; readonly int capacity;
+    public HistoryRing(int cap) { capacity = Math.Max(1, cap); buf = new HistoryPoint[capacity]; }
+    public void Add(DateTime at, int p)
+    {
+        if (count > 0 && p > buf[(head - 1 + capacity) % capacity].Percent * 2) { Clear(); }
+        buf[head] = new HistoryPoint(at, ProviderMath.ClampPercent(p));
+        head = (head + 1) % capacity;
+        if (count < capacity) count++;
+    }
+    public void Clear() { head = count = 0; }
+    public int? SampleAtSecondsAgo(int seconds)
+    {
+        if (count == 0) return null;
+        DateTime target = DateTime.Now.AddSeconds(-seconds);
+        int? best = null; long bestDelta = long.MaxValue;
+        for (int i = 0; i < count; i++)
+        {
+            HistoryPoint pt = buf[(head - 1 - i + capacity) % capacity];
+            long delta = Math.Abs((long)(pt.At - target).TotalSeconds);
+            if (delta < bestDelta) { bestDelta = delta; best = pt.Percent; }
+        }
+        return best;
+    }
+    public int? Current { get { return count > 0 ? buf[(head - 1 + capacity) % capacity].Percent : (int?)null; } }
+}
+
+static class BarColors
+{
+    public static Color ForPercent(int p)
+    {
+        if (p >= 50) return Color.FromRgb(74, 222, 128);
+        if (p >= 20) return Color.FromRgb(245, 180, 55);
+        return Color.FromRgb(236, 83, 83);
+    }
+    public static Color BurnGhost(Color baseColor, int level)
+    {
+        double factor = level == 1 ? 0.45 : level == 2 ? 0.28 : 0.14;
+        return Color.FromArgb((byte)(255 * factor), baseColor.R, baseColor.G, baseColor.B);
+    }
+}
+
 class MiniMaxSettings { public bool enabled = false; public string mmxPath = ""; public string region = "cn"; public string quotaModelName = "MiniMax-M*"; }
 class DeepSeekEstimateSettings { public bool enabled = true; public string model = "deepseek-v4-pro"; public decimal averageInputTokens = 30000m; public decimal averageOutputTokens = 8000m; public decimal cacheHitRatio = 0.3m; }
 class TokenPrices { public decimal inputCacheHit; public decimal inputCacheMiss; public decimal output; }
@@ -589,6 +634,8 @@ class LiquidWindow : Window
     Ellipse statusDot, statusGlow;
     Border shell;
     Border fiveFill, weekFill, fiveTrack, weekTrack, miniFiveFill, miniWeekFill, miniFiveTrack, miniWeekTrack, deepSeekFill, deepSeekTrack;
+    HistoryRing codex5hHistory = new HistoryRing(32), codexWeekHistory = new HistoryRing(32);
+    HistoryRing minimax5hHistory = new HistoryRing(32), minimaxWeekHistory = new HistoryRing(32);
 
     public LiquidWindow()
     {
@@ -689,9 +736,9 @@ class LiquidWindow : Window
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
             AddDivider(grid, row++);
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "5h", out fivePercent, out fiveUsed, out fiveTrack, out fiveFill);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "Week", out weekPercent, out weekUsed, out weekTrack, out weekFill);
+            AddMeter(grid, row++, "5H", out fivePercent, out fiveUsed, out fiveTrack, out fiveFill, 12);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(46) });
+            AddMeter(grid, row++, "W", out weekPercent, out weekUsed, out weekTrack, out weekFill, 6);
         }
 
         // ===== MINIMAX section =====
@@ -704,9 +751,9 @@ class LiquidWindow : Window
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
             AddDivider(grid, row++);
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "5h", out miniFivePercent, out miniFiveUsed, out miniFiveTrack, out miniFiveFill);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "Week", out miniWeekPercent, out miniWeekUsed, out miniWeekTrack, out miniWeekFill);
+            AddMeter(grid, row++, "5H", out miniFivePercent, out miniFiveUsed, out miniFiveTrack, out miniFiveFill, 12);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(46) });
+            AddMeter(grid, row++, "W", out miniWeekPercent, out miniWeekUsed, out miniWeekTrack, out miniWeekFill, 6);
         }
 
         // ===== DEEPSEEK section =====
@@ -817,7 +864,7 @@ class LiquidWindow : Window
     static ComboBox Choice(StackPanel parent, string label, string[] values, string selected) { parent.Children.Add(new TextBlock { Text = label, Opacity = 0.72, Margin = new Thickness(0, 7, 0, 2) }); ComboBox box = new ComboBox { Padding = new Thickness(4, 2, 4, 2) }; foreach (string value in values) box.Items.Add(value); box.SelectedItem = Array.IndexOf(values, selected) >= 0 ? selected : values[0]; parent.Children.Add(box); return box; }
     static bool TryDecimal(string text, out decimal value) { return decimal.TryParse(text, out value) || decimal.TryParse(text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out value); }
 
-    void AddMeter(Grid parent, int row, string label, out TextBlock percent, out TextBlock used, out Border track, out Border fill)
+    void AddMeter(Grid parent, int row, string label, out TextBlock percent, out TextBlock used, out Border track, out Border fill, int barH = 5)
     {
         Grid line = new Grid();
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
@@ -825,7 +872,7 @@ class LiquidWindow : Window
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
         line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
-        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(10) });
+        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(barH + 6) });
 
         TextBlock labelText = Text(label, 15, 0, 232, 240, 250, FontWeights.SemiBold);
         percent = Text("--", 16, 0, 248, 251, 255, FontWeights.Bold); percent.HorizontalAlignment = HorizontalAlignment.Right;
@@ -833,8 +880,8 @@ class LiquidWindow : Window
         Grid.SetColumn(used, 2); Grid.SetColumn(percent, 3);
         line.Children.Add(labelText); line.Children.Add(used); line.Children.Add(percent);
 
-        track = new Border { Height = 5, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromArgb(82, 120, 132, 150)), VerticalAlignment = VerticalAlignment.Center };
-        fill = new Border { Height = 5, CornerRadius = new CornerRadius(3), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
+        track = new Border { Height = barH, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromArgb(60, 90, 100, 120)), VerticalAlignment = VerticalAlignment.Center };
+        fill = new Border { Height = barH, CornerRadius = new CornerRadius(3), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
         Grid barGrid = new Grid(); barGrid.Children.Add(track); barGrid.Children.Add(fill);
         Grid.SetRow(barGrid, 1); Grid.SetColumnSpan(barGrid, 4); line.Children.Add(barGrid);
 
@@ -877,7 +924,7 @@ class LiquidWindow : Window
             UsageSnapshot nextUsage; QuotaSnapshot nextQuota;
             try { nextUsage = NativeSqlite.ReadState(dbPath); } catch (Exception ex) { nextUsage = new UsageSnapshot(false, 0, 0, 0, 0, ex.Message); }
             try { nextQuota = CodexAppServerQuota.Fetch(); } catch (Exception ex) { nextQuota = new QuotaSnapshot(false, quota.FiveHourRemainingPercent, quota.WeeklyRemainingPercent, ex.Message, quota.FiveHourResetsAt, quota.WeeklyResetsAt); }
-            Dispatcher.BeginInvoke(new Action(delegate { usage = nextUsage; quota = nextQuota; codexBusy = false; lastRefreshAt = DateTime.Now; Render(); }));
+            Dispatcher.BeginInvoke(new Action(delegate { usage = nextUsage; quota = nextQuota; codexBusy = false; lastRefreshAt = DateTime.Now; if (quota.Available) { codex5hHistory.Add(DateTime.Now, quota.FiveHourRemainingPercent); codexWeekHistory.Add(DateTime.Now, quota.WeeklyRemainingPercent); } Render(); }));
         });
     }
 
@@ -889,7 +936,7 @@ class LiquidWindow : Window
             MiniMaxSnapshot next;
             try { next = MiniMaxQuota.Fetch(settings.minimax); }
             catch (Exception ex) { next = new MiniMaxSnapshot(minimax.Available, minimax.FiveHourRemainingPercent, minimax.WeeklyRemainingPercent, minimax.Available, minimax.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
-            Dispatcher.BeginInvoke(new Action(delegate { minimax = next; minimaxBusy = false; Render(); }));
+            Dispatcher.BeginInvoke(new Action(delegate { minimax = next; minimaxBusy = false; if (minimax.Available) { minimax5hHistory.Add(DateTime.Now, minimax.FiveHourRemainingPercent); minimaxWeekHistory.Add(DateTime.Now, minimax.WeeklyRemainingPercent); } Render(); }));
         });
     }
 
@@ -929,16 +976,21 @@ class LiquidWindow : Window
 
         if (settings.codex.enabled)
         {
-            UpdateMeter(fivePercent, fiveUsed, fiveTrack, fiveFill, quota.Available, quota.FiveHourRemainingPercent, usage.FiveHourTokens, Color.FromRgb(74, 222, 128));
-            UpdateMeter(weekPercent, weekUsed, weekTrack, weekFill, quota.Available, quota.WeeklyRemainingPercent, usage.WeekTokens, Color.FromRgb(74, 222, 128));
+            fivePercent.Text = quota.Available ? quota.FiveHourRemainingPercent + "%" : "--";
+            weekPercent.Text = quota.Available ? quota.WeeklyRemainingPercent + "%" : "--";
+            weekUsed.Text = FormatTokens(usage.WeekTokens);
             fiveUsed.Text = "resets " + FormatResetCountdown(quota.FiveHourResetsAt);
+            UpdateMeter(fiveFill, fiveTrack, quota.Available, quota.FiveHourRemainingPercent, Color.FromRgb(74, 222, 128));
+            UpdateMeter(weekFill, weekTrack, quota.Available, quota.WeeklyRemainingPercent, Color.FromRgb(74, 222, 128));
         }
         if (settings.minimax.enabled)
         {
-            UpdateMeter(miniFivePercent, miniFiveUsed, miniFiveTrack, miniFiveFill, minimax.Available, minimax.FiveHourRemainingPercent, 0, Color.FromRgb(74, 222, 128));
-            UpdateMeter(miniWeekPercent, miniWeekUsed, miniWeekTrack, miniWeekFill, minimax.Available, minimax.WeeklyRemainingPercent, 0, Color.FromRgb(74, 222, 128));
+            miniFivePercent.Text = minimax.Available ? minimax.FiveHourRemainingPercent + "%" : "--";
+            miniWeekPercent.Text = minimax.Available ? minimax.WeeklyRemainingPercent + "%" : "--";
             miniFiveUsed.Text = !string.IsNullOrEmpty(minimax.RemainsTime) ? "resets " + minimax.RemainsTime : "";
             miniWeekUsed.Text = "";
+            UpdateMeter(miniFiveFill, miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent, Color.FromRgb(74, 222, 128));
+            UpdateMeter(miniWeekFill, miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent, Color.FromRgb(74, 222, 128));
             string miniTip = (minimax.IsStale ? "Stale: " : "") + minimax.Status;
             if (!string.IsNullOrEmpty(minimax.RemainsTime)) miniTip += "\n5h: " + minimax.RemainsTime;
             miniHeading.ToolTip = miniTip; miniFivePercent.ToolTip = miniTip; miniWeekPercent.ToolTip = miniTip;
@@ -946,8 +998,9 @@ class LiquidWindow : Window
         if (settings.deepseek.enabled)
         {
             int? balancePercent = ProviderMath.RemainingPercent(deepseek.TotalBalance, settings.deepseek.referenceBudget);
-            UpdateMeter(deepSeekPercent, deepSeekUsed, deepSeekTrack, deepSeekFill, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault(), 0, Color.FromRgb(74, 222, 128));
+            deepSeekPercent.Text = (deepseek.Available && balancePercent.HasValue) ? balancePercent.Value + "%" : "--";
             deepSeekUsed.Text = deepseek.Available ? CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
+            UpdateMeter(deepSeekFill, deepSeekTrack, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault(), Color.FromRgb(74, 222, 128));
             decimal estimatedCost = EstimateCost();
             string estimate = estimatedCost > 0m && deepseek.TotalBalance >= 0m ? "\nAbout " + Math.Floor(deepseek.TotalBalance / estimatedCost).ToString("0") + " configured tasks" : "";
             string deepTip = "Balance: " + CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + CurrencySymbol(deepseek.Currency) + settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
@@ -976,11 +1029,9 @@ class LiquidWindow : Window
 
     static string CurrencySymbol(string currency) { return string.Equals(currency, "CNY", StringComparison.OrdinalIgnoreCase) ? "\u00a5" : string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : (currency ?? "") + " "; }
 
-    void UpdateMeter(TextBlock percent, TextBlock used, Border track, Border fill, bool available, int remaining, long tokens, Color accent)
+    void UpdateMeter(Border fill, Border track, bool available, int remaining, Color accent)
     {
-        percent.Text = available ? remaining + "%" : "--";
-        used.Text = FormatTokens(tokens);
-        Color fillColor = remaining <= 10 ? Color.FromRgb(236, 83, 83) : accent;
+        Color fillColor = available ? BarColors.ForPercent(remaining) : Color.FromRgb(100, 100, 110);
         fill.Background = new LinearGradientBrush(
             new GradientStopCollection {
                 new GradientStop(Color.FromArgb(130, 255, 255, 255), 0),
@@ -993,6 +1044,25 @@ class LiquidWindow : Window
         double width = track.ActualWidth;
         if (width <= 0) width = Width - 40;
         fill.Width = Math.Max(4, width * Math.Max(0, Math.Min(100, remaining)) / 100.0);
+    }
+
+    void RenderGhosts(Border[] ghosts, HistoryRing history, Border fill, Border track)
+    {
+        if (ghosts == null || ghosts.Length < 3) return;
+        double width = track.ActualWidth; if (width <= 0) width = Width - 40;
+        LinearGradientBrush brush = fill.Background as LinearGradientBrush;
+        Color baseColor = brush != null ? brush.GradientStops[2].Color : Color.FromRgb(74, 222, 128);
+        int? cur = history.Current;
+        int?[] samples = { history.SampleAtSecondsAgo(300), history.SampleAtSecondsAgo(1200), history.SampleAtSecondsAgo(1800) };
+        int?[] positions = { cur, samples[0], samples[1], samples[2] };
+        for (int i = 0; i < 3; i++)
+        {
+            int? from = positions[i + 1], to = positions[i];
+            if (!from.HasValue || !to.HasValue || from.Value >= to.Value) { ghosts[i].Width = 0; continue; }
+            ghosts[i].Background = new SolidColorBrush(BarColors.BurnGhost(baseColor, i + 1));
+            ghosts[i].Width = Math.Max(1, width * (to.Value - from.Value) / 100.0);
+            ghosts[i].Margin = new Thickness(width * from.Value / 100.0, 0, 0, 0);
+        }
     }
 
     void EnableSystemGlass()
