@@ -1,6 +1,8 @@
 # Token Dashboard
 
-A lightweight Windows desktop dashboard for monitoring AI token plans, quotas, balances, and local usage estimates — single WPF file, zero dependencies beyond the .NET Framework built into Windows.
+[![Windows Build & Test](https://github.com/Suhangl/Token-Dashboard/actions/workflows/windows-build.yml/badge.svg)](https://github.com/Suhangl/Token-Dashboard/actions/workflows/windows-build.yml)
+
+A lightweight Windows desktop dashboard
 
 Currently supports **Codex**, **MiniMax**, and **DeepSeek**.
 
