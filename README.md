@@ -2,11 +2,13 @@
 
 [![Windows Build & Test](https://github.com/Suhangl/Token-Dashboard/actions/workflows/windows-build.yml/badge.svg)](https://github.com/Suhangl/Token-Dashboard/actions/workflows/windows-build.yml)
 
-A lightweight Windows desktop dashboard
+A lightweight Windows desktop dashboard for monitoring AI token plans, quotas, balances, and local usage estimates — single WPF file, zero dependencies beyond the .NET Framework built into Windows.
 
 Currently supports **Codex**, **MiniMax**, and **DeepSeek**.
 
-![screenshot](docs/screenshot.png)
+## License
+
+**All rights reserved.** No license is granted at this time. This project is not open-source. Redistribution, modification, and commercial use require explicit permission from the repository owner.
 
 ## Features
 

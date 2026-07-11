@@ -56,6 +56,12 @@ static class ProgramTests
         Expect(CodexAppServerQuota.ParseJsonRpcId("not json") == null, "JSON-RPC ignores non-JSON");
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"id\":1}") == 1, "JSON-RPC id:1 (not target)");
 
+        // --- Window persistence ---
+        DashboardSettings ds = new DashboardSettings();
+        Expect(double.IsNaN(ds.windowLeft) && double.IsNaN(ds.windowTop), "new settings have NaN position (use default)");
+        Expect(ds.windowTopmost, "new settings default to topmost");
+        Expect(ds.windowWidth == 0 && ds.windowHeight == 0, "new settings have zero stored size");
+
         if (failures != 0) Environment.Exit(1);
         Console.WriteLine("Provider self-tests passed");
     }

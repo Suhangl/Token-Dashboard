@@ -163,6 +163,8 @@ class GlassSettings { public int cornerRadius = 15; }
 class DashboardSettings
 {
     public int refreshSeconds = 60;
+    public double windowLeft = double.NaN, windowTop = double.NaN, windowWidth, windowHeight;
+    public bool windowTopmost = true;
     public CodexSettings codex = new CodexSettings();
     public MiniMaxSettings minimax = new MiniMaxSettings();
     public DeepSeekSettings deepseek = new DeepSeekSettings();
@@ -591,19 +593,36 @@ class LiquidWindow : Window
     public LiquidWindow()
     {
         settings = DashboardSettings.Load();
-        Width = 360; Height = DesiredHeight();
+        Width = settings.windowWidth > 0 ? settings.windowWidth : 360;
+        Height = settings.windowHeight > 0 ? settings.windowHeight : DesiredHeight();
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.CanResize;
         MinWidth = 320; MinHeight = 150;
         ShowInTaskbar = false;
-        Topmost = true;
+        Topmost = settings.windowTopmost;
         AllowsTransparency = true;
         Background = Brushes.Transparent;
         FontFamily = new FontFamily("Segoe UI");
         UseLayoutRounding = true;
         SnapsToDevicePixels = true;
-        Left = SystemParameters.WorkArea.Right - Width - 18;
-        Top = SystemParameters.WorkArea.Top + 72;
+        double left = double.IsNaN(settings.windowLeft) ? double.NaN : settings.windowLeft;
+        double top = double.IsNaN(settings.windowTop) ? double.NaN : settings.windowTop;
+        if (!IsOnScreen(left, top, Width, Height))
+        {
+            left = SystemParameters.WorkArea.Right - Width - 18;
+            top = SystemParameters.WorkArea.Top + 72;
+        }
+        Left = left; Top = top;
+        Closed += delegate
+        {
+            if (WindowState == WindowState.Normal)
+            {
+                settings.windowLeft = Left; settings.windowTop = Top;
+                settings.windowWidth = Width; settings.windowHeight = Height;
+            }
+            settings.windowTopmost = Topmost;
+            try { settings.Save(); } catch { }
+        };
         SourceInitialized += delegate
         {
             HwndSource source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
@@ -1033,6 +1052,15 @@ class LiquidWindow : Window
     bool IsOnResizeEdge(Point p)
     {
         return p.X <= ResizeGrip || p.Y <= ResizeGrip || p.X >= ActualWidth - ResizeGrip || p.Y >= ActualHeight - ResizeGrip;
+    }
+
+    static bool IsOnScreen(double left, double top, double width, double height)
+    {
+        if (double.IsNaN(left) || double.IsNaN(top) || width <= 0 || height <= 0) return false;
+        double vsL = SystemParameters.VirtualScreenLeft, vsT = SystemParameters.VirtualScreenTop;
+        double vsR = vsL + SystemParameters.VirtualScreenWidth, vsB = vsT + SystemParameters.VirtualScreenHeight;
+        // Require at least 50×50 px visible
+        return left + width - 50 > vsL && left + 50 < vsR && top + height - 50 > vsT && top + 50 < vsB;
     }
 
     static RadialGradientBrush GlowBrush(Color color)

@@ -63,7 +63,11 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 输出 `dist\CodexDashboard.exe`（~65KB）。
 
-## 自测
+## 窗口持久化
+
+关闭时自动保存位置、尺寸和置顶状态到 `settings.json`。启动时恢复。
+若保存位置不再处于任何屏幕范围内（例如外接显示器断开），自动回退到默认位置。
+最小可见区域要求 50×50 像素。
 
 ```powershell
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"

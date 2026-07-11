@@ -1,28 +1,21 @@
 # Contributing
 
-## Workflow
+This project is **not currently accepting external code contributions** (Pull Requests).
 
-1. Create a **feature branch** from `main`
-2. Make your changes
-3. Ensure the build and tests pass
-4. Open a Pull Request against `main`
+## How to Help
 
-## Rules
+- **Bug reports and feature suggestions**: Open a GitHub Issue with:
+  - Steps to reproduce
+  - Expected vs actual behavior
+  - Your Windows version and DPI setting (if UI-related)
+- **Documentation corrections**: Open an Issue describing the error
+- **Security issues**: See [SECURITY.md](SECURITY.md) — do not use public Issues
 
-- **Do not commit** `dist/`, `.exe`, `.dll`, or any build artifacts
-- **Do not commit** API keys, tokens, or credentials of any kind
-- Use `Path.GetTempPath()` or clearly fake test paths — never commit real user paths
-- When modifying a Provider, add corresponding tests to `ProgramTests.cs`
-- When changing data sources, update both `README.md` and `docs/DEVELOPMENT.md`
-- For UI changes, include before/after screenshots in the PR description
-
-## Build & Test
+## Build & Test (for reference)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
-
-Then build and run the test harness:
 
 ```powershell
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
@@ -31,4 +24,7 @@ $netfx = "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFr
 .\dist\ProviderTests.exe
 ```
 
-Both must pass before the PR is ready for review.
+## Rules
+
+- Do not commit `dist/`, `.exe`, or build artifacts
+- Do not commit API keys or credentials
