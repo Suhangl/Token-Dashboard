@@ -77,6 +77,16 @@ static class ProgramTests
         Expect(loaded.popupDismissDelayMs == 300, "legacy load falls back to default popupDismissDelayMs");
         Expect(!loaded.popupStickyOnLaunch, "legacy load falls back to default popupStickyOnLaunch");
 
+        // --- Settings round-trip preserves popupLeft/Top + sticky + timings (Task 3) ---
+        DashboardSettings popupSettings = new DashboardSettings();
+        popupSettings.popupLeft = 123.5; popupSettings.popupTop = 678.9; popupSettings.popupStickyOnLaunch = true;
+        popupSettings.popupDismissDelayMs = 250; popupSettings.popupHoverDelayMs = 350;
+        string popupJson = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(popupSettings);
+        DashboardSettings popupBack = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<DashboardSettings>(popupJson);
+        Expect(popupBack.popupLeft == 123.5 && popupBack.popupTop == 678.9, "popupLeft/Top round-trip");
+        Expect(popupBack.popupStickyOnLaunch, "popupStickyOnLaunch round-trip");
+        Expect(popupBack.popupDismissDelayMs == 250 && popupBack.popupHoverDelayMs == 350, "popup timings round-trip");
+
         // --- BuildUiFactory builds without throwing for any provider mix ---
         DashboardSettings[] configs = new DashboardSettings[]
         {

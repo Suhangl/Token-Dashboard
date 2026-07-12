@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -863,7 +864,7 @@ static class BuildUiFactory
     }
 }
 
-class LiquidWindow : Window
+class PopupWindow : Window
 {
     const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
@@ -880,6 +881,212 @@ class LiquidWindow : Window
     [StructLayout(LayoutKind.Sequential)] struct WindowCompositionAttributeData { public WindowCompositionAttribute Attribute; public IntPtr Data; public int SizeOfData; }
     [StructLayout(LayoutKind.Sequential)] struct Margins { public int Left, Right, Top, Bottom; }
 
+    public DashboardSettings Settings;
+    public Bindings Bindings;
+    DispatcherTimer _saveDebounce;
+    bool _isSticky;
+
+    public bool IsSticky { get { return _isSticky; } }
+
+    public PopupWindow(DashboardSettings settings)
+    {
+        Settings = settings;
+        WindowStyle = WindowStyle.None;
+        ShowInTaskbar = false;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
+        Topmost = false;
+        MinWidth = 320; MinHeight = 150;
+        FontFamily = new FontFamily("Segoe UI");
+        UseLayoutRounding = true; SnapsToDevicePixels = true;
+        Width = 360;
+        Height = DesiredHeight(settings);
+
+        BuildResult buildResult = BuildUiFactory.Build(settings);
+        Bindings = buildResult.Bindings;
+        Content = buildResult.Root;
+
+        if (!double.IsNaN(settings.popupLeft)) Left = settings.popupLeft;
+        if (!double.IsNaN(settings.popupTop)) Top = settings.popupTop;
+
+        SourceInitialized += delegate { EnableSystemGlass(this); };
+        Activated += delegate { };
+        Deactivated += delegate { if (_isSticky) LeaveSticky(); };
+        Closing += delegate(object s2, CancelEventArgs e)
+        {
+            if (_isSticky) { e.Cancel = true; Hide(); }
+        };
+
+        Bindings.timeText.PreviewMouseLeftButtonDown += delegate(object s2, MouseButtonEventArgs e)
+        {
+            if (e.GetPosition(this).Y <= 24)
+            {
+                try { DragMove(); } catch { }
+                e.Handled = true;
+            }
+        };
+
+        _saveDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _saveDebounce.Tick += delegate(object s2, EventArgs e2)
+        {
+            _saveDebounce.Stop();
+            Settings.popupLeft = Left;
+            Settings.popupTop = Top;
+            try { Settings.Save(); } catch { }
+        };
+        LocationChanged += delegate { _saveDebounce.Stop(); _saveDebounce.Start(); };
+
+        DashboardState.Changed += Render;
+        Render();
+    }
+
+    public void EnterSticky()
+    {
+        _isSticky = true;
+        Topmost = true;
+    }
+
+    public void LeaveSticky()
+    {
+        _isSticky = false;
+        Topmost = false;
+        Hide();
+    }
+
+    void Render()
+    {
+        if (Bindings == null || Bindings.timeText == null) return;
+        UsageSnapshot usage = DashboardState.Usage;
+        QuotaSnapshot quota = DashboardState.CodexQuota;
+        MiniMaxSnapshot minimax = DashboardState.MiniMax;
+        DeepSeekSnapshot deepseek = DashboardState.DeepSeek;
+
+        Bindings.timeText.Text = DateTime.Now.ToString("HH:mm:ss");
+        Color status = quota.Available ? Color.FromRgb(74, 222, 128) : Color.FromRgb(236, 83, 83);
+        Bindings.statusDot.Fill = new SolidColorBrush(status);
+        Bindings.statusGlow.Fill = LiquidWindow.GlowBrush(status);
+
+        if (Settings.codex.enabled)
+        {
+            Bindings.fivePercent.Text = quota.Available ? quota.FiveHourRemainingPercent + "%" : "--";
+            Bindings.weekPercent.Text = quota.Available ? quota.WeeklyRemainingPercent + "%" : "--";
+            Bindings.weekUsed.Text = LiquidWindow.FormatTokens(usage.WeekTokens);
+            Bindings.fiveUsed.Text = "resets " + LiquidWindow.FormatResetCountdown(quota.FiveHourResetsAt);
+            UpdateMeter(Bindings.fiveFill, Bindings.fiveTrack, quota.Available, quota.FiveHourRemainingPercent);
+            UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.Available, quota.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
+        }
+        if (Settings.minimax.enabled)
+        {
+            Bindings.miniFivePercent.Text = minimax.Available ? minimax.FiveHourRemainingPercent + "%" : "--";
+            Bindings.miniWeekPercent.Text = minimax.Available ? minimax.WeeklyRemainingPercent + "%" : "--";
+            Bindings.miniFiveUsed.Text = !string.IsNullOrEmpty(minimax.RemainsTime) ? "resets " + minimax.RemainsTime : "";
+            Bindings.miniWeekUsed.Text = "";
+            UpdateMeter(Bindings.miniFiveFill, Bindings.miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent);
+            UpdateMeter(Bindings.miniWeekFill, Bindings.miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
+            string miniTip = (minimax.IsStale ? "Stale: " : "") + minimax.Status;
+            if (!string.IsNullOrEmpty(minimax.RemainsTime)) miniTip += "\n5h: " + minimax.RemainsTime;
+            Bindings.miniHeading.ToolTip = miniTip;
+            Bindings.miniFivePercent.ToolTip = miniTip;
+            Bindings.miniWeekPercent.ToolTip = miniTip;
+        }
+        if (Settings.deepseek.enabled)
+        {
+            int? balancePercent = ProviderMath.RemainingPercent(deepseek.TotalBalance, Settings.deepseek.referenceBudget);
+            Bindings.deepSeekPercent.Text = (deepseek.Available && balancePercent.HasValue) ? balancePercent.Value + "%" : "--";
+            Bindings.deepSeekUsed.Text = deepseek.Available ? LiquidWindow.CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
+            UpdateMeter(Bindings.deepSeekFill, Bindings.deepSeekTrack, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault());
+            decimal estimatedCost = EstimateCost();
+            string estimate = estimatedCost > 0m && deepseek.TotalBalance >= 0m ? "\nAbout " + Math.Floor(deepseek.TotalBalance / estimatedCost).ToString("0") + " configured tasks" : "";
+            string deepTip = "Balance: " + LiquidWindow.CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + LiquidWindow.CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + LiquidWindow.CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + LiquidWindow.CurrencySymbol(deepseek.Currency) + Settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
+            Bindings.deepSeekHeading.ToolTip = deepTip;
+            Bindings.deepSeekPercent.ToolTip = deepTip;
+            Bindings.deepSeekUsed.ToolTip = deepTip;
+        }
+        if (Settings.codex.enabled)
+        {
+            Bindings.footerLeft.Text = quota.Available ? "tokens " + LiquidWindow.FormatTokens(usage.TotalTokens) : "";
+            Bindings.footerRight.Text = "";
+        }
+        else
+        {
+            Bindings.footerLeft.Text = "";
+            Bindings.footerRight.Text = "";
+        }
+        Bindings.footerSub.Text = "";
+    }
+
+    decimal EstimateCost()
+    {
+        TokenPrices price;
+        if (!Settings.deepseek.estimate.enabled || !Settings.deepseek.pricesPerMillionTokens.TryGetValue(Settings.deepseek.estimate.model, out price)) return 0m;
+        return ProviderMath.EstimatedCostPerRequest(Settings.deepseek.estimate.averageInputTokens, Settings.deepseek.estimate.averageOutputTokens, Settings.deepseek.estimate.cacheHitRatio, price.inputCacheHit, price.inputCacheMiss, price.output);
+    }
+
+    void UpdateMeter(Border fill, Border track, bool available, int remaining, Color? overrideColor = null)
+    {
+        Color fillColor;
+        if (!available) fillColor = Color.FromRgb(100, 100, 110);
+        else if (overrideColor.HasValue) fillColor = overrideColor.Value;
+        else fillColor = BarColors.ForPercent(remaining);
+        fill.Background = new LinearGradientBrush(
+            new GradientStopCollection {
+                new GradientStop(Color.FromArgb(130, 255, 255, 255), 0),
+                new GradientStop(Color.FromArgb(245, (byte)Math.Min(255, fillColor.R + 24), (byte)Math.Min(255, fillColor.G + 24), (byte)Math.Min(255, fillColor.B + 24)), 0.18),
+                new GradientStop(fillColor, 0.6),
+                new GradientStop(Color.FromArgb(238, (byte)Math.Max(0, fillColor.R - 16), (byte)Math.Max(0, fillColor.G - 16), (byte)Math.Max(0, fillColor.B - 16)), 1)
+            },
+            new Point(0, 0),
+            new Point(0, 1));
+        double width = track.ActualWidth;
+        if (width <= 0) width = Width - 40;
+        fill.Width = Math.Max(4, width * Math.Max(0, Math.Min(100, remaining)) / 100.0);
+    }
+
+    static double DesiredHeight(DashboardSettings s)
+    {
+        double h = 62;
+        if (s.codex != null && s.codex.enabled) h += 17 + 3 + 55;
+        if (s.minimax != null && s.minimax.enabled) h += 10 + 17 + 3 + 55;
+        if (s.deepseek != null && s.deepseek.enabled) h += ((s.codex != null && s.codex.enabled || s.minimax != null && s.minimax.enabled) ? 10 : 4) + 17 + 3 + 42;
+        return h + 30;
+    }
+
+    internal static void EnableSystemGlass(Window w)
+    {
+        try
+        {
+            IntPtr hwnd = new WindowInteropHelper(w).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            int corner = DWM_WINDOW_CORNER_PREFERENCE_ROUND;
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+            int backdrop = DWMSBT_TRANSIENTWINDOW;
+            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+            Margins margins = new Margins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
+            DwmExtendFrameIntoClientArea(hwnd, ref margins);
+
+            AccentPolicy accent = new AccentPolicy();
+            accent.AccentState = AccentState.ACCENT_ENABLE_ACRYLICBLURBEHIND;
+            accent.GradientColor = unchecked((int)0x381E1612);
+            int size = Marshal.SizeOf(accent);
+            IntPtr ptr = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(accent, ptr, false);
+                WindowCompositionAttributeData data = new WindowCompositionAttributeData();
+                data.Attribute = WindowCompositionAttribute.WCA_ACCENT_POLICY;
+                data.SizeOfData = size;
+                data.Data = ptr;
+                SetWindowCompositionAttribute(hwnd, ref data);
+            }
+            finally { Marshal.FreeHGlobal(ptr); }
+        }
+        catch { }
+    }
+}
+
+class LiquidWindow : Window
+{
     UsageSnapshot usage = new UsageSnapshot(false, 0, 0, 0, 0, "starting");
     QuotaSnapshot quota = new QuotaSnapshot(false, 0, 0, "starting", null, null);
     MiniMaxSnapshot minimax = new MiniMaxSnapshot(false, 0, 0, false, DateTime.MinValue, "not configured", ProviderSource.Cached);
@@ -1200,7 +1407,7 @@ class LiquidWindow : Window
         return ProviderMath.EstimatedCostPerRequest(settings.deepseek.estimate.averageInputTokens, settings.deepseek.estimate.averageOutputTokens, settings.deepseek.estimate.cacheHitRatio, price.inputCacheHit, price.inputCacheMiss, price.output);
     }
 
-    static string CurrencySymbol(string currency) { return string.Equals(currency, "CNY", StringComparison.OrdinalIgnoreCase) ? "\u00a5" : string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : (currency ?? "") + " "; }
+    internal static string CurrencySymbol(string currency) { return string.Equals(currency, "CNY", StringComparison.OrdinalIgnoreCase) ? "\u00a5" : string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : (currency ?? "") + " "; }
 
     void UpdateMeter(Border fill, Border track, bool available, int remaining, Color? overrideColor = null)
     {
@@ -1243,34 +1450,7 @@ class LiquidWindow : Window
 
     void EnableSystemGlass()
     {
-        try
-        {
-            IntPtr hwnd = new WindowInteropHelper(this).Handle;
-            if (hwnd == IntPtr.Zero) return;
-            int corner = DWM_WINDOW_CORNER_PREFERENCE_ROUND;
-            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
-            int backdrop = DWMSBT_TRANSIENTWINDOW;
-            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
-            Margins margins = new Margins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
-            DwmExtendFrameIntoClientArea(hwnd, ref margins);
-
-            AccentPolicy accent = new AccentPolicy();
-            accent.AccentState = AccentState.ACCENT_ENABLE_ACRYLICBLURBEHIND;
-            accent.GradientColor = unchecked((int)0x381E1612);
-            int size = Marshal.SizeOf(accent);
-            IntPtr ptr = Marshal.AllocHGlobal(size);
-            try
-            {
-                Marshal.StructureToPtr(accent, ptr, false);
-                WindowCompositionAttributeData data = new WindowCompositionAttributeData();
-                data.Attribute = WindowCompositionAttribute.WCA_ACCENT_POLICY;
-                data.SizeOfData = size;
-                data.Data = ptr;
-                SetWindowCompositionAttribute(hwnd, ref data);
-            }
-            finally { Marshal.FreeHGlobal(ptr); }
-        }
-        catch { }
+        PopupWindow.EnableSystemGlass(this);
     }
 
     IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -1309,7 +1489,7 @@ class LiquidWindow : Window
         return left + width - 50 > vsL && left + 50 < vsR && top + height - 50 > vsT && top + 50 < vsB;
     }
 
-    static RadialGradientBrush GlowBrush(Color color)
+    internal static RadialGradientBrush GlowBrush(Color color)
     {
         RadialGradientBrush brush = new RadialGradientBrush();
         brush.GradientStops.Add(new GradientStop(Color.FromArgb(190, color.R, color.G, color.B), 0));
@@ -1323,7 +1503,7 @@ class LiquidWindow : Window
         return new DropShadowEffect { Color = color, BlurRadius = blur, ShadowDepth = 0, Opacity = opacity };
     }
 
-    static string FormatResetCountdown(DateTime? resetAt)
+    internal static string FormatResetCountdown(DateTime? resetAt)
     {
         if (!resetAt.HasValue) return "--";
         TimeSpan left = resetAt.Value - DateTime.Now;
@@ -1331,7 +1511,7 @@ class LiquidWindow : Window
         if (left.TotalHours >= 1) return ((int)left.TotalHours) + "h " + left.Minutes + "m";
         return left.Minutes + "m";
     }
-    static string FormatTokens(long value)
+    internal static string FormatTokens(long value)
     {
         if (value >= 1000000000L) return (value / 1000000000.0).ToString("0.00") + "B";
         if (value >= 1000000L) return (value / 1000000.0).ToString("0.00") + "M";
