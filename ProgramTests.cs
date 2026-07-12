@@ -11,6 +11,20 @@ static class ProgramTests
         Console.Error.WriteLine("FAIL " + name);
     }
 
+    static void WaitForDispatcher(int milliseconds)
+    {
+        System.Windows.Threading.DispatcherFrame frame = new System.Windows.Threading.DispatcherFrame();
+        System.Windows.Threading.DispatcherTimer timer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background);
+        timer.Interval = TimeSpan.FromMilliseconds(milliseconds);
+        timer.Tick += delegate
+        {
+            timer.Stop();
+            frame.Continue = false;
+        };
+        timer.Start();
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
+
     [STAThread]
     static void Main()
     {
@@ -110,6 +124,34 @@ static class ProgramTests
                 Expect(false, "BuildUiFactory " + names[i] + " threw: " + ex.Message);
             }
         }
+
+        DashboardSettings pinSettings = new DashboardSettings();
+        PopupWindow popup = new PopupWindow(pinSettings);
+        popup.Show();
+        WaitForDispatcher(50);
+        System.Windows.Controls.Grid pinGrid = popup.Bindings.stickyPinButton as System.Windows.Controls.Grid;
+        System.Windows.Shapes.Ellipse pinEllipse = pinGrid == null ? null : pinGrid.Children[0] as System.Windows.Shapes.Ellipse;
+        System.Windows.Media.SolidColorBrush pinFill = pinEllipse == null ? null : pinEllipse.Fill as System.Windows.Media.SolidColorBrush;
+        Expect(pinGrid != null && pinEllipse != null && pinFill != null, "sticky pin initializes animatable ellipse fill");
+        Expect(pinFill != null && pinFill.Color == System.Windows.Media.Colors.Transparent, "sticky pin starts transparent");
+        Expect(pinGrid != null && (string)System.Windows.Controls.ToolTipService.GetToolTip(pinGrid) == "钉住 popup", "sticky pin starts with inactive tooltip");
+        if (pinGrid != null)
+        {
+            System.Windows.Input.MouseButtonEventArgs click = new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left);
+            click.RoutedEvent = System.Windows.UIElement.MouseLeftButtonDownEvent;
+            pinGrid.RaiseEvent(click);
+            Expect(click.Handled, "sticky pin handles click");
+            Expect(popup.IsSticky && popup.Topmost, "sticky pin click enters sticky mode");
+            Expect((string)System.Windows.Controls.ToolTipService.GetToolTip(pinGrid) == "已钉住（点击其他窗口取消）", "sticky pin click sets active tooltip");
+            WaitForDispatcher(250);
+            Expect(pinFill != null && pinFill.Color == System.Windows.Media.Color.FromRgb(230, 230, 230), "sticky pin animates to filled");
+            popup.LeaveSticky();
+            Expect(!popup.IsSticky && !popup.Topmost, "LeaveSticky exits sticky mode");
+            Expect((string)System.Windows.Controls.ToolTipService.GetToolTip(pinGrid) == "钉住 popup", "LeaveSticky restores inactive tooltip");
+            WaitForDispatcher(250);
+            Expect(pinFill != null && pinFill.Color == System.Windows.Media.Colors.Transparent, "LeaveSticky animates pin to transparent");
+        }
+        popup.Close();
 
         if (failures != 0) Environment.Exit(1);
         Console.WriteLine("Provider self-tests passed");

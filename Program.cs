@@ -887,6 +887,9 @@ class PopupWindow : Window
     DispatcherTimer _countdownTick;
     DateTime _nextRefreshAt;
     bool _isSticky;
+    Grid _stickyPinGrid;
+    System.Windows.Shapes.Ellipse _pinEllipse;
+    SolidColorBrush _pinFill;
 
     public bool IsSticky { get { return _isSticky; } }
 
@@ -951,6 +954,7 @@ class PopupWindow : Window
         _countdownTick.Start();
         RenderCountdown();
         Render();
+        BindToStickyButton();
     }
 
     void RenderCountdown()
@@ -958,6 +962,47 @@ class PopupWindow : Window
         if (Bindings == null || Bindings.footerSub == null) return;
         int seconds = Math.Max(0, (int)Math.Ceiling((_nextRefreshAt - DateTime.Now).TotalSeconds));
         Bindings.footerSub.Text = "refresh " + seconds + "s";
+    }
+
+    public void BindToStickyButton()
+    {
+        Grid grid = Bindings.stickyPinButton as Grid;
+        if (grid == null) return;
+
+        System.Windows.Shapes.Ellipse pin = null;
+        foreach (UIElement child in grid.Children)
+        {
+            pin = child as System.Windows.Shapes.Ellipse;
+            if (pin != null) break;
+        }
+        if (pin == null) return;
+
+        _stickyPinGrid = grid;
+        _pinEllipse = pin;
+        _pinFill = new SolidColorBrush(Colors.Transparent);
+        pin.Fill = _pinFill;
+        ToolTipService.SetToolTip(grid, "钉住 popup");
+
+        grid.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
+        {
+            if (_isSticky) return;
+            e.Handled = true;
+            AnimatePin(_pinEllipse, _pinFill, true);
+            EnterSticky();
+            ToolTipService.SetToolTip(_stickyPinGrid, "已钉住（点击其他窗口取消）");
+        };
+    }
+
+    static void AnimatePin(System.Windows.Shapes.Ellipse pin, SolidColorBrush fill, bool toSticky)
+    {
+        if (pin == null || fill == null) return;
+        Color from = fill.Color;
+        Color to = toSticky ? Color.FromRgb(230, 230, 230) : Colors.Transparent;
+        System.Windows.Media.Animation.ColorAnimation animation = new System.Windows.Media.Animation.ColorAnimation(from, to, new Duration(TimeSpan.FromMilliseconds(200)));
+        System.Windows.Media.Animation.CubicEase easing = new System.Windows.Media.Animation.CubicEase();
+        easing.EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut;
+        animation.EasingFunction = easing;
+        fill.BeginAnimation(SolidColorBrush.ColorProperty, animation);
     }
 
     public void EnterSticky()
@@ -970,6 +1015,8 @@ class PopupWindow : Window
     {
         _isSticky = false;
         Topmost = false;
+        AnimatePin(_pinEllipse, _pinFill, false);
+        if (_stickyPinGrid != null) ToolTipService.SetToolTip(_stickyPinGrid, "钉住 popup");
         Hide();
     }
 
