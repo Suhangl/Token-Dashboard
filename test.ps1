@@ -16,7 +16,7 @@ if (!(Test-Path $netfx)) {
     }
 }
 
-& $csc /nologo /target:exe /main:ProgramTests /out:"$out\ProviderTests.exe" /reference:System.Web.Extensions.dll /reference:"$netfx\System.Xaml.dll" /reference:"$netfx\WindowsBase.dll" /reference:"$netfx\PresentationCore.dll" /reference:"$netfx\PresentationFramework.dll" "$root\Program.cs" "$root\ProgramTests.cs"
+& $csc /nologo /target:exe /main:ProgramTests /out:"$out\ProviderTests.exe" /reference:System.Web.Extensions.dll /reference:"$netfx\System.Xaml.dll" /reference:"$netfx\WindowsBase.dll" /reference:"$netfx\PresentationCore.dll" /reference:"$netfx\PresentationFramework.dll" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll "$root\Program.cs" "$root\ProgramTests.cs"
 if ($LASTEXITCODE -ne 0) { throw "Test build failed" }
 
 $result = & "$out\ProviderTests.exe" 2>&1

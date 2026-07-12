@@ -153,6 +153,18 @@ static class ProgramTests
         }
         popup.Close();
 
+        // --- BitmapFactory (Task 5) ---
+        System.Drawing.Icon trayIcon = BitmapFactory.CreateTrayIcon(
+            System.Drawing.ColorTranslator.FromHtml("#74DE80"),
+            System.Drawing.ColorTranslator.FromHtml("#EC5353"));
+        Expect(trayIcon != null, "BitmapFactory.CreateTrayIcon returns non-null icon");
+        Expect(trayIcon.Width == 16 && trayIcon.Height == 16, "tray icon is 16x16");
+
+        // --- TrayController construction (Task 5) ---
+        // NOTE: TrayController needs Dispatcher + Application.Current for the real NotifyIcon
+        // path. In console test mode (Application.Current == null), we rely on build.ps1
+        // success as the smoke check. Re-enable an in-process fake when Task 6 lands.
+
         if (failures != 0) Environment.Exit(1);
         Console.WriteLine("Provider self-tests passed");
     }

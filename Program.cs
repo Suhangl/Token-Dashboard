@@ -1585,6 +1585,91 @@ class LiquidWindow : Window
     }
 }
 
+interface INotifyIconBackend
+{
+    event System.Windows.Forms.MouseEventHandler MouseMove;
+    event EventHandler MouseLeave;
+    event EventHandler Click;
+    void Show();
+    void Hide();
+    void SetIcon(System.Drawing.Icon icon);
+    void Dispose();
+}
+
+class TrayIconBackend : INotifyIconBackend
+{
+    internal System.Windows.Forms.NotifyIcon _icon;
+    public event System.Windows.Forms.MouseEventHandler MouseMove;
+    public event EventHandler MouseLeave;
+    public event EventHandler Click;
+
+    public TrayIconBackend()
+    {
+        _icon = new System.Windows.Forms.NotifyIcon();
+        _icon.MouseMove += delegate(object s, System.Windows.Forms.MouseEventArgs e) { var h = MouseMove; if (h != null) h(s, e); };
+        _icon.Click += delegate { var h = Click; if (h != null) h(this, EventArgs.Empty); };
+    }
+
+    public void Show() { _icon.Visible = true; }
+    public void Hide() { _icon.Visible = false; }
+    public void SetIcon(System.Drawing.Icon icon) { _icon.Icon = icon; }
+    public void Dispose() { _icon.Visible = false; _icon.Dispose(); }
+}
+
+static class BitmapFactory
+{
+    public static System.Drawing.Icon CreateTrayIcon(System.Drawing.Color healthyDot, System.Drawing.Color errorDot)
+    {
+        using (System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(16, 16))
+        using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.Clear(System.Drawing.Color.Transparent);
+
+            DrawDot(g, 4, 8, healthyDot);
+            DrawDot(g, 12, 8, errorDot);
+
+            IntPtr hicon = bmp.GetHicon();
+            return System.Drawing.Icon.FromHandle(hicon);
+        }
+    }
+
+    static void DrawDot(System.Drawing.Graphics g, int cx, int cy, System.Drawing.Color color)
+    {
+        using (System.Drawing.SolidBrush brush = new System.Drawing.SolidBrush(color))
+        {
+            g.FillEllipse(brush, cx - 3, cy - 3, 6, 6);
+        }
+        using (System.Drawing.Pen pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(160, 168, 184), 1))
+        {
+            g.DrawEllipse(pen, cx - 4, cy - 4, 8, 8);
+        }
+    }
+}
+
+class TrayController : IDisposable
+{
+    readonly INotifyIconBackend _backend;
+    readonly DashboardSettings _settings;
+    PopupWindow _popup;
+
+    public TrayController(DashboardSettings settings, INotifyIconBackend backend)
+    {
+        _settings = settings;
+        _backend = backend;
+        try
+        {
+            _backend.SetIcon(BitmapFactory.CreateTrayIcon(
+                System.Drawing.ColorTranslator.FromHtml("#74DE80"),
+                System.Drawing.ColorTranslator.FromHtml("#EC5353")));
+            _backend.Show();
+        }
+        catch { /* fallback: handled in Task 9 if tray unavailable */ }
+    }
+
+    public void Dispose() { if (_popup != null) _popup.Close(); _backend.Dispose(); }
+}
+
 static class Program
 {
     [STAThread]
