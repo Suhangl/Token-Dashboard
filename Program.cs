@@ -887,6 +887,8 @@ class PopupWindow : Window
     DispatcherTimer _countdownTick;
     DateTime _nextRefreshAt;
     bool _isSticky;
+    bool _codexBusy, _minimaxBusy, _deepseekBusy;
+    string _dbPath = Environment.ExpandEnvironmentVariables("%USERPROFILE%\\.codex\\state_5.sqlite");
     Grid _stickyPinGrid;
     System.Windows.Shapes.Ellipse _pinEllipse;
     SolidColorBrush _pinFill;
@@ -950,11 +952,12 @@ class PopupWindow : Window
         DashboardState.Changed += delegate { _nextRefreshAt = DateTime.Now.AddSeconds(Settings.refreshSeconds); };
         _countdownTick = new DispatcherTimer();
         _countdownTick.Interval = TimeSpan.FromSeconds(1);
-        _countdownTick.Tick += delegate { RenderCountdown(); };
+        _countdownTick.Tick += delegate { if (DateTime.Now >= _nextRefreshAt) StartRefresh(); RenderCountdown(); };
         _countdownTick.Start();
         RenderCountdown();
         Render();
         BindToStickyButton();
+        StartRefresh();
     }
 
     void RenderCountdown()
@@ -1031,14 +1034,14 @@ class PopupWindow : Window
         Bindings.timeText.Text = DateTime.Now.ToString("HH:mm:ss");
         Color status = quota.Available ? Color.FromRgb(74, 222, 128) : Color.FromRgb(236, 83, 83);
         Bindings.statusDot.Fill = new SolidColorBrush(status);
-        Bindings.statusGlow.Fill = LiquidWindow.GlowBrush(status);
+        Bindings.statusGlow.Fill = GlowBrush(status);
 
         if (Settings.codex.enabled)
         {
             Bindings.fivePercent.Text = quota.Available ? quota.FiveHourRemainingPercent + "%" : "--";
             Bindings.weekPercent.Text = quota.Available ? quota.WeeklyRemainingPercent + "%" : "--";
-            Bindings.weekUsed.Text = LiquidWindow.FormatTokens(usage.WeekTokens);
-            Bindings.fiveUsed.Text = "resets " + LiquidWindow.FormatResetCountdown(quota.FiveHourResetsAt);
+            Bindings.weekUsed.Text = FormatTokens(usage.WeekTokens);
+            Bindings.fiveUsed.Text = "resets " + FormatResetCountdown(quota.FiveHourResetsAt);
             UpdateMeter(Bindings.fiveFill, Bindings.fiveTrack, quota.Available, quota.FiveHourRemainingPercent);
             UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.Available, quota.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
         }
@@ -1060,18 +1063,18 @@ class PopupWindow : Window
         {
             int? balancePercent = ProviderMath.RemainingPercent(deepseek.TotalBalance, Settings.deepseek.referenceBudget);
             Bindings.deepSeekPercent.Text = (deepseek.Available && balancePercent.HasValue) ? balancePercent.Value + "%" : "--";
-            Bindings.deepSeekUsed.Text = deepseek.Available ? LiquidWindow.CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
+            Bindings.deepSeekUsed.Text = deepseek.Available ? CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
             UpdateMeter(Bindings.deepSeekFill, Bindings.deepSeekTrack, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault());
             decimal estimatedCost = EstimateCost();
             string estimate = estimatedCost > 0m && deepseek.TotalBalance >= 0m ? "\nAbout " + Math.Floor(deepseek.TotalBalance / estimatedCost).ToString("0") + " configured tasks" : "";
-            string deepTip = "Balance: " + LiquidWindow.CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + LiquidWindow.CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + LiquidWindow.CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + LiquidWindow.CurrencySymbol(deepseek.Currency) + Settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
+            string deepTip = "Balance: " + CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + CurrencySymbol(deepseek.Currency) + Settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
             Bindings.deepSeekHeading.ToolTip = deepTip;
             Bindings.deepSeekPercent.ToolTip = deepTip;
             Bindings.deepSeekUsed.ToolTip = deepTip;
         }
         if (Settings.codex.enabled)
         {
-            Bindings.footerLeft.Text = quota.Available ? "tokens " + LiquidWindow.FormatTokens(usage.TotalTokens) : "";
+            Bindings.footerLeft.Text = quota.Available ? "tokens " + FormatTokens(usage.TotalTokens) : "";
             Bindings.footerRight.Text = "";
         }
         else
@@ -1106,6 +1109,116 @@ class PopupWindow : Window
         double width = track.ActualWidth;
         if (width <= 0) width = Width - 40;
         fill.Width = Math.Max(4, width * Math.Max(0, Math.Min(100, remaining)) / 100.0);
+    }
+
+    public void StartRefresh()
+    {
+        _nextRefreshAt = DateTime.Now.AddSeconds(Settings.refreshSeconds);
+        if (Settings.codex.enabled && !_codexBusy) RefreshCodex();
+        if (Settings.minimax.enabled && !_minimaxBusy) RefreshMiniMax();
+        if (Settings.deepseek.enabled && !_deepseekBusy) RefreshDeepSeek();
+    }
+
+    void RefreshCodex()
+    {
+        _codexBusy = true;
+        UsageSnapshot prevUsage = DashboardState.Usage;
+        QuotaSnapshot prevQuota = DashboardState.CodexQuota;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            UsageSnapshot nextUsage;
+            QuotaSnapshot nextQuota;
+            try { nextUsage = NativeSqlite.ReadState(_dbPath); } catch (Exception ex) { nextUsage = new UsageSnapshot(false, 0, 0, 0, 0, ex.Message); }
+            try { nextQuota = CodexAppServerQuota.Fetch(); } catch (Exception ex) { nextQuota = new QuotaSnapshot(false, prevQuota.FiveHourRemainingPercent, prevQuota.WeeklyRemainingPercent, ex.Message, prevQuota.FiveHourResetsAt, prevQuota.WeeklyResetsAt); }
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                DashboardState.SetUsage(nextUsage);
+                DashboardState.SetCodexQuota(nextQuota);
+                _codexBusy = false;
+            }));
+        });
+    }
+
+    void RefreshMiniMax()
+    {
+        _minimaxBusy = true;
+        MiniMaxSnapshot prev = DashboardState.MiniMax;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            MiniMaxSnapshot next;
+            try { next = MiniMaxQuota.Fetch(Settings.minimax); }
+            catch (Exception ex) { next = new MiniMaxSnapshot(prev.Available, prev.FiveHourRemainingPercent, prev.WeeklyRemainingPercent, prev.Available, prev.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                DashboardState.SetMiniMax(next);
+                _minimaxBusy = false;
+            }));
+        });
+    }
+
+    void RefreshDeepSeek()
+    {
+        _deepseekBusy = true;
+        DeepSeekSnapshot prev = DashboardState.DeepSeek;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            DeepSeekSnapshot next = null;
+            string key = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY");
+            if (string.IsNullOrWhiteSpace(key)) key = WindowsCredentialStore.Read("CodexDashboard.DeepSeekApiKey");
+            bool allowOfficial = !string.Equals(Settings.deepseek.balanceMode, "manualOnly", StringComparison.OrdinalIgnoreCase);
+            if (allowOfficial && !string.IsNullOrWhiteSpace(key))
+            {
+                try { next = DeepSeekBalance.Fetch(key, Settings.deepseek.currency); }
+                catch (Exception ex) { if (string.Equals(Settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase)) next = new DeepSeekSnapshot(prev.Available, prev.TotalBalance, prev.GrantedBalance, prev.ToppedUpBalance, prev.Currency, prev.Available, prev.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
+            }
+            if (next == null && !string.Equals(Settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase))
+                next = new DeepSeekSnapshot(true, Settings.deepseek.manualBalance, 0m, Settings.deepseek.manualBalance, Settings.deepseek.currency, false, DateTime.Now, "DeepSeek manual balance", ProviderSource.Manual);
+            if (next == null) next = new DeepSeekSnapshot(prev.Available, prev.TotalBalance, prev.GrantedBalance, prev.ToppedUpBalance, prev.Currency, prev.Available, prev.LastSuccessAt, "DeepSeek API key is not available", ProviderSource.Cached);
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                DashboardState.SetDeepSeek(next);
+                _deepseekBusy = false;
+            }));
+        });
+    }
+
+    static string SafeProviderError(Exception ex)
+    {
+        string message = ex == null ? "provider failed" : ex.Message;
+        return message.Length > 120 ? message.Substring(0, 120) : message;
+    }
+
+    internal static RadialGradientBrush GlowBrush(Color color)
+    {
+        RadialGradientBrush brush = new RadialGradientBrush();
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(190, color.R, color.G, color.B), 0));
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(72, color.R, color.G, color.B), 0.42));
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1));
+        return brush;
+    }
+
+    internal static string FormatResetCountdown(DateTime? resetAt)
+    {
+        if (!resetAt.HasValue) return "--";
+        TimeSpan left = resetAt.Value - DateTime.Now;
+        if (left.TotalSeconds <= 0) return "now";
+        if (left.TotalHours >= 1) return ((int)left.TotalHours) + "h " + left.Minutes + "m";
+        return left.Minutes + "m";
+    }
+
+    internal static string FormatTokens(long value)
+    {
+        if (value >= 1000000000L) return (value / 1000000000.0).ToString("0.00") + "B";
+        if (value >= 1000000L) return (value / 1000000.0).ToString("0.00") + "M";
+        if (value >= 1000L) return (value / 1000.0).ToString("0.0") + "K";
+        return value.ToString();
+    }
+
+    internal static string CurrencySymbol(string currency)
+    {
+        return string.Equals(currency, "CNY", StringComparison.OrdinalIgnoreCase) ? "\u00a5"
+            : string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$"
+            : (currency ?? "") + " ";
     }
 
     public static double DesiredHeight(DashboardSettings s)
@@ -1150,149 +1263,8 @@ class PopupWindow : Window
     }
 }
 
-class LiquidWindow : Window
+static class SettingsDialog
 {
-    UsageSnapshot usage = new UsageSnapshot(false, 0, 0, 0, 0, "starting");
-    QuotaSnapshot quota = new QuotaSnapshot(false, 0, 0, "starting", null, null);
-    MiniMaxSnapshot minimax = new MiniMaxSnapshot(false, 0, 0, false, DateTime.MinValue, "not configured", ProviderSource.Cached);
-    DeepSeekSnapshot deepseek = new DeepSeekSnapshot(false, 0m, 0m, 0m, "CNY", false, DateTime.MinValue, "not configured", ProviderSource.Cached);
-    DashboardSettings settings;
-    DateTime nextRefreshAt = DateTime.Now, lastRefreshAt = DateTime.MinValue;
-    bool codexBusy, minimaxBusy, deepseekBusy;
-    string dbPath = Environment.ExpandEnvironmentVariables("%USERPROFILE%\\.codex\\state_5.sqlite");
-    DispatcherTimer tick;
-
-    const int ResizeGrip = 9;
-    const int WM_NCHITTEST = 0x0084;
-    const int HTLEFT = 10, HTRIGHT = 11, HTTOP = 12, HTTOPLEFT = 13, HTTOPRIGHT = 14, HTBOTTOM = 15, HTBOTTOMLEFT = 16, HTBOTTOMRIGHT = 17;
-
-    TextBlock timeText, codexHeading, miniHeading, deepSeekHeading;
-    TextBlock fivePercent, fiveUsed, weekPercent, weekUsed, miniFivePercent, miniFiveUsed, miniWeekPercent, miniWeekUsed, deepSeekPercent, deepSeekUsed, footerLeft, footerRight, footerSub;
-    Ellipse statusDot, statusGlow;
-    Border shell;
-    Border fiveFill, weekFill, fiveTrack, weekTrack, miniFiveFill, miniWeekFill, miniFiveTrack, miniWeekTrack, deepSeekFill, deepSeekTrack;
-    FrameworkElement stickyPinButton;
-    HistoryRing codex5hHistory = new HistoryRing(32), codexWeekHistory = new HistoryRing(32);
-    HistoryRing minimax5hHistory = new HistoryRing(32), minimaxWeekHistory = new HistoryRing(32);
-
-    public LiquidWindow()
-    {
-        settings = DashboardSettings.Load();
-        Width = settings.windowWidth > 0 ? settings.windowWidth : 360;
-        Height = settings.windowHeight > 0 ? settings.windowHeight : DesiredHeight();
-        WindowStyle = WindowStyle.None;
-        ResizeMode = ResizeMode.CanResize;
-        MinWidth = 320; MinHeight = 150;
-        ShowInTaskbar = false;
-        Topmost = settings.windowTopmost;
-        AllowsTransparency = true;
-        Background = Brushes.Transparent;
-        FontFamily = new FontFamily("Segoe UI");
-        UseLayoutRounding = true;
-        SnapsToDevicePixels = true;
-        double left = double.IsNaN(settings.windowLeft) ? double.NaN : settings.windowLeft;
-        double top = double.IsNaN(settings.windowTop) ? double.NaN : settings.windowTop;
-        if (!IsOnScreen(left, top, Width, Height))
-        {
-            left = SystemParameters.WorkArea.Right - Width - 18;
-            top = SystemParameters.WorkArea.Top + 72;
-        }
-        Left = left; Top = top;
-        Closed += delegate
-        {
-            if (WindowState == WindowState.Normal)
-            {
-                settings.windowLeft = Left; settings.windowTop = Top;
-                settings.windowWidth = Width; settings.windowHeight = Height;
-            }
-            settings.windowTopmost = Topmost;
-            try { settings.Save(); } catch { }
-        };
-        SourceInitialized += delegate
-        {
-            HwndSource source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
-            if (source != null) source.AddHook(WndProc);
-            EnableSystemGlass();
-        };
-        MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
-        {
-            if (IsOnResizeEdge(e.GetPosition(this))) return;
-            try { DragMove(); } catch { }
-        };
-
-        ContextMenu menu = new ContextMenu();
-        MenuItem refresh = new MenuItem(); refresh.Header = "刷新"; refresh.Click += delegate { StartRefresh(); };
-        MenuItem providerSettings = new MenuItem(); providerSettings.Header = "设置..."; providerSettings.Click += delegate { ShowProviderSettings(settings); };
-        MenuItem topmost = new MenuItem(); topmost.Header = "置顶"; topmost.Click += delegate { Topmost = !Topmost; };
-        MenuItem exit = new MenuItem(); exit.Header = "退出"; exit.Click += delegate { Close(); };
-        menu.Items.Add(refresh); menu.Items.Add(providerSettings); menu.Items.Add(new Separator()); menu.Items.Add(topmost); menu.Items.Add(exit);
-        ContextMenu = menu;
-
-        Content = BuildUi();
-        ApplyPercentEffects();
-        tick = new DispatcherTimer();
-        tick.Interval = TimeSpan.FromSeconds(1);
-        tick.Tick += delegate { if (DateTime.Now >= nextRefreshAt) StartRefresh(); else Render(); };
-        tick.Start();
-        StartRefresh();
-    }
-
-    UIElement BuildUi()
-    {
-        BuildResult result = BuildUiFactory.Build(settings);
-        shell = result.Root as Border;
-        Bindings b = result.Bindings;
-        timeText = b.timeText;
-        codexHeading = b.codexHeading;
-        miniHeading = b.miniHeading;
-        deepSeekHeading = b.deepSeekHeading;
-        fivePercent = b.fivePercent;
-        fiveUsed = b.fiveUsed;
-        weekPercent = b.weekPercent;
-        weekUsed = b.weekUsed;
-        miniFivePercent = b.miniFivePercent;
-        miniFiveUsed = b.miniFiveUsed;
-        miniWeekPercent = b.miniWeekPercent;
-        miniWeekUsed = b.miniWeekUsed;
-        deepSeekPercent = b.deepSeekPercent;
-        deepSeekUsed = b.deepSeekUsed;
-        footerLeft = b.footerLeft;
-        footerRight = b.footerRight;
-        footerSub = b.footerSub;
-        statusDot = b.statusDot;
-        statusGlow = b.statusGlow;
-        fiveFill = b.fiveFill;
-        fiveTrack = b.fiveTrack;
-        weekFill = b.weekFill;
-        weekTrack = b.weekTrack;
-        miniFiveFill = b.miniFiveFill;
-        miniFiveTrack = b.miniFiveTrack;
-        miniWeekFill = b.miniWeekFill;
-        miniWeekTrack = b.miniWeekTrack;
-        deepSeekFill = b.deepSeekFill;
-        deepSeekTrack = b.deepSeekTrack;
-        stickyPinButton = b.stickyPinButton;
-        return result.Root;
-    }
-
-    void ApplyPercentEffects()
-    {
-        if (settings.codex.enabled) { fivePercent.Effect = PercentEffect(); weekPercent.Effect = PercentEffect(); }
-        if (settings.minimax.enabled) { miniFivePercent.Effect = PercentEffect(); miniWeekPercent.Effect = PercentEffect(); }
-        if (settings.deepseek.enabled) deepSeekPercent.Effect = PercentEffect();
-    }
-
-    static DropShadowEffect PercentEffect() { return new DropShadowEffect { Color = Colors.Black, BlurRadius = 4, ShadowDepth = 1, Opacity = 0.28 }; }
-
-    double DesiredHeight()
-    {
-        double h = 62; // header (24) + footer (38)
-        if (settings != null && settings.codex.enabled) h += 17 + 3 + 55;
-        if (settings != null && settings.minimax.enabled) h += 10 + 17 + 3 + 55;
-        if (settings != null && settings.deepseek.enabled) h += ((settings.codex.enabled || settings.minimax.enabled) ? 10 : 4) + 17 + 3 + 42;
-        return h + 30; // grid margin (16+14)
-    }
-
     public static void ShowProviderSettings(DashboardSettings settings)
     {
         DashboardSettings candidate = DashboardSettings.Load();
@@ -1353,238 +1325,6 @@ class LiquidWindow : Window
     static PasswordBox SecretField(StackPanel parent, string label) { parent.Children.Add(new TextBlock { Text = label, Opacity = 0.72, Margin = new Thickness(0, 7, 0, 2) }); PasswordBox box = new PasswordBox { Padding = new Thickness(6, 3, 6, 3) }; parent.Children.Add(box); return box; }
     static ComboBox Choice(StackPanel parent, string label, string[] values, string selected) { parent.Children.Add(new TextBlock { Text = label, Opacity = 0.72, Margin = new Thickness(0, 7, 0, 2) }); ComboBox box = new ComboBox { Padding = new Thickness(4, 2, 4, 2) }; foreach (string value in values) box.Items.Add(value); box.SelectedItem = Array.IndexOf(values, selected) >= 0 ? selected : values[0]; parent.Children.Add(box); return box; }
     static bool TryDecimal(string text, out decimal value) { return decimal.TryParse(text, out value) || decimal.TryParse(text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out value); }
-
-    void StartRefresh()
-    {
-        nextRefreshAt = DateTime.Now.AddSeconds(settings.refreshSeconds);
-        if (settings.codex.enabled && !codexBusy) RefreshCodex();
-        if (settings.minimax.enabled && !minimaxBusy) RefreshMiniMax();
-        if (settings.deepseek.enabled && !deepseekBusy) RefreshDeepSeek();
-        Render();
-    }
-
-    void RefreshCodex()
-    {
-        codexBusy = true;
-        ThreadPool.QueueUserWorkItem(delegate
-        {
-            UsageSnapshot nextUsage; QuotaSnapshot nextQuota;
-            try { nextUsage = NativeSqlite.ReadState(dbPath); } catch (Exception ex) { nextUsage = new UsageSnapshot(false, 0, 0, 0, 0, ex.Message); }
-            try { nextQuota = CodexAppServerQuota.Fetch(); } catch (Exception ex) { nextQuota = new QuotaSnapshot(false, quota.FiveHourRemainingPercent, quota.WeeklyRemainingPercent, ex.Message, quota.FiveHourResetsAt, quota.WeeklyResetsAt); }
-            Dispatcher.BeginInvoke(new Action(delegate { usage = nextUsage; quota = nextQuota; codexBusy = false; lastRefreshAt = DateTime.Now; if (quota.Available) { codex5hHistory.Add(DateTime.Now, quota.FiveHourRemainingPercent); codexWeekHistory.Add(DateTime.Now, quota.WeeklyRemainingPercent); } Render(); }));
-        });
-    }
-
-    void RefreshMiniMax()
-    {
-        minimaxBusy = true;
-        ThreadPool.QueueUserWorkItem(delegate
-        {
-            MiniMaxSnapshot next;
-            try { next = MiniMaxQuota.Fetch(settings.minimax); }
-            catch (Exception ex) { next = new MiniMaxSnapshot(minimax.Available, minimax.FiveHourRemainingPercent, minimax.WeeklyRemainingPercent, minimax.Available, minimax.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
-            Dispatcher.BeginInvoke(new Action(delegate { minimax = next; minimaxBusy = false; if (minimax.Available) { minimax5hHistory.Add(DateTime.Now, minimax.FiveHourRemainingPercent); minimaxWeekHistory.Add(DateTime.Now, minimax.WeeklyRemainingPercent); } Render(); }));
-        });
-    }
-
-    void RefreshDeepSeek()
-    {
-        deepseekBusy = true;
-        ThreadPool.QueueUserWorkItem(delegate
-        {
-            DeepSeekSnapshot next = null;
-            string key = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY");
-            if (string.IsNullOrWhiteSpace(key)) key = WindowsCredentialStore.Read("CodexDashboard.DeepSeekApiKey");
-            bool allowOfficial = !string.Equals(settings.deepseek.balanceMode, "manualOnly", StringComparison.OrdinalIgnoreCase);
-            if (allowOfficial && !string.IsNullOrWhiteSpace(key))
-            {
-                try { next = DeepSeekBalance.Fetch(key, settings.deepseek.currency); }
-                catch (Exception ex) { if (string.Equals(settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase)) next = new DeepSeekSnapshot(deepseek.Available, deepseek.TotalBalance, deepseek.GrantedBalance, deepseek.ToppedUpBalance, deepseek.Currency, deepseek.Available, deepseek.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
-            }
-            if (next == null && !string.Equals(settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase))
-                next = new DeepSeekSnapshot(true, settings.deepseek.manualBalance, 0m, settings.deepseek.manualBalance, settings.deepseek.currency, false, DateTime.Now, "DeepSeek manual balance", ProviderSource.Manual);
-            if (next == null) next = new DeepSeekSnapshot(deepseek.Available, deepseek.TotalBalance, deepseek.GrantedBalance, deepseek.ToppedUpBalance, deepseek.Currency, deepseek.Available, deepseek.LastSuccessAt, "DeepSeek API key is not available", ProviderSource.Cached);
-            Dispatcher.BeginInvoke(new Action(delegate { deepseek = next; deepseekBusy = false; Render(); }));
-        });
-    }
-
-    static string SafeProviderError(Exception ex)
-    {
-        string message = ex == null ? "provider failed" : ex.Message;
-        return message.Length > 120 ? message.Substring(0, 120) : message;
-    }
-
-    void Render()
-    {
-        timeText.Text = DateTime.Now.ToString("HH:mm:ss");
-        Color status = codexBusy ? Color.FromRgb(245, 180, 55) : quota.Available ? Color.FromRgb(74, 222, 128) : Color.FromRgb(236, 83, 83);
-        statusDot.Fill = new SolidColorBrush(status);
-        statusGlow.Fill = GlowBrush(status);
-
-        if (settings.codex.enabled)
-        {
-            fivePercent.Text = quota.Available ? quota.FiveHourRemainingPercent + "%" : "--";
-            weekPercent.Text = quota.Available ? quota.WeeklyRemainingPercent + "%" : "--";
-            weekUsed.Text = FormatTokens(usage.WeekTokens);
-            fiveUsed.Text = "resets " + FormatResetCountdown(quota.FiveHourResetsAt);
-            UpdateMeter(fiveFill, fiveTrack, quota.Available, quota.FiveHourRemainingPercent);
-            UpdateMeter(weekFill, weekTrack, quota.Available, quota.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
-        }
-        if (settings.minimax.enabled)
-        {
-            miniFivePercent.Text = minimax.Available ? minimax.FiveHourRemainingPercent + "%" : "--";
-            miniWeekPercent.Text = minimax.Available ? minimax.WeeklyRemainingPercent + "%" : "--";
-            miniFiveUsed.Text = !string.IsNullOrEmpty(minimax.RemainsTime) ? "resets " + minimax.RemainsTime : "";
-            miniWeekUsed.Text = "";
-            UpdateMeter(miniFiveFill, miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent);
-            UpdateMeter(miniWeekFill, miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
-            string miniTip = (minimax.IsStale ? "Stale: " : "") + minimax.Status;
-            if (!string.IsNullOrEmpty(minimax.RemainsTime)) miniTip += "\n5h: " + minimax.RemainsTime;
-            miniHeading.ToolTip = miniTip; miniFivePercent.ToolTip = miniTip; miniWeekPercent.ToolTip = miniTip;
-        }
-        if (settings.deepseek.enabled)
-        {
-            int? balancePercent = ProviderMath.RemainingPercent(deepseek.TotalBalance, settings.deepseek.referenceBudget);
-            deepSeekPercent.Text = (deepseek.Available && balancePercent.HasValue) ? balancePercent.Value + "%" : "--";
-            deepSeekUsed.Text = deepseek.Available ? CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
-            UpdateMeter(deepSeekFill, deepSeekTrack, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault());
-            decimal estimatedCost = EstimateCost();
-            string estimate = estimatedCost > 0m && deepseek.TotalBalance >= 0m ? "\nAbout " + Math.Floor(deepseek.TotalBalance / estimatedCost).ToString("0") + " configured tasks" : "";
-            string deepTip = "Balance: " + CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + CurrencySymbol(deepseek.Currency) + settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
-            deepSeekHeading.ToolTip = deepTip; deepSeekPercent.ToolTip = deepTip; deepSeekUsed.ToolTip = deepTip;
-        }
-        if (settings.codex.enabled)
-        {
-            footerLeft.Text = quota.Available ? "tokens " + FormatTokens(usage.TotalTokens) : "";
-            footerRight.Text = "";
-        }
-        else
-        {
-            footerLeft.Text = "";
-            footerRight.Text = "";
-        }
-        int seconds = Math.Max(0, (int)Math.Ceiling((nextRefreshAt - DateTime.Now).TotalSeconds));
-        footerSub.Text = "refresh " + seconds + "s";
-    }
-
-    decimal EstimateCost()
-    {
-        TokenPrices price;
-        if (!settings.deepseek.estimate.enabled || !settings.deepseek.pricesPerMillionTokens.TryGetValue(settings.deepseek.estimate.model, out price)) return 0m;
-        return ProviderMath.EstimatedCostPerRequest(settings.deepseek.estimate.averageInputTokens, settings.deepseek.estimate.averageOutputTokens, settings.deepseek.estimate.cacheHitRatio, price.inputCacheHit, price.inputCacheMiss, price.output);
-    }
-
-    internal static string CurrencySymbol(string currency) { return string.Equals(currency, "CNY", StringComparison.OrdinalIgnoreCase) ? "\u00a5" : string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : (currency ?? "") + " "; }
-
-    void UpdateMeter(Border fill, Border track, bool available, int remaining, Color? overrideColor = null)
-    {
-        Color fillColor;
-        if (!available) fillColor = Color.FromRgb(100, 100, 110);
-        else if (overrideColor.HasValue) fillColor = overrideColor.Value;
-        else fillColor = BarColors.ForPercent(remaining);
-        fill.Background = new LinearGradientBrush(
-            new GradientStopCollection {
-                new GradientStop(Color.FromArgb(130, 255, 255, 255), 0),
-                new GradientStop(Color.FromArgb(245, (byte)Math.Min(255, fillColor.R + 24), (byte)Math.Min(255, fillColor.G + 24), (byte)Math.Min(255, fillColor.B + 24)), 0.18),
-                new GradientStop(fillColor, 0.6),
-                new GradientStop(Color.FromArgb(238, (byte)Math.Max(0, fillColor.R - 16), (byte)Math.Max(0, fillColor.G - 16), (byte)Math.Max(0, fillColor.B - 16)), 1)
-            },
-            new Point(0, 0),
-            new Point(0, 1));
-        double width = track.ActualWidth;
-        if (width <= 0) width = Width - 40;
-        fill.Width = Math.Max(4, width * Math.Max(0, Math.Min(100, remaining)) / 100.0);
-    }
-
-    void RenderGhosts(Border[] ghosts, HistoryRing history, Border fill, Border track)
-    {
-        if (ghosts == null || ghosts.Length < 3) return;
-        double width = track.ActualWidth; if (width <= 0) width = Width - 40;
-        LinearGradientBrush brush = fill.Background as LinearGradientBrush;
-        Color baseColor = brush != null ? brush.GradientStops[2].Color : Color.FromRgb(74, 222, 128);
-        int? cur = history.Current;
-        int?[] samples = { history.SampleAtSecondsAgo(300), history.SampleAtSecondsAgo(1200), history.SampleAtSecondsAgo(1800) };
-        int?[] positions = { cur, samples[0], samples[1], samples[2] };
-        for (int i = 0; i < 3; i++)
-        {
-            int? from = positions[i + 1], to = positions[i];
-            if (!from.HasValue || !to.HasValue || from.Value >= to.Value) { ghosts[i].Width = 0; continue; }
-            ghosts[i].Background = new SolidColorBrush(BarColors.BurnGhost(baseColor, i + 1));
-            ghosts[i].Width = Math.Max(1, width * (to.Value - from.Value) / 100.0);
-            ghosts[i].Margin = new Thickness(width * from.Value / 100.0, 0, 0, 0);
-        }
-    }
-
-    void EnableSystemGlass()
-    {
-        PopupWindow.EnableSystemGlass(this);
-    }
-
-    IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-    {
-        if (msg != WM_NCHITTEST) return IntPtr.Zero;
-        int x = unchecked((short)((long)lParam & 0xffff));
-        int y = unchecked((short)(((long)lParam >> 16) & 0xffff));
-        Point p = PointFromScreen(new Point(x, y));
-        bool left = p.X <= ResizeGrip, right = p.X >= ActualWidth - ResizeGrip;
-        bool top = p.Y <= ResizeGrip, bottom = p.Y >= ActualHeight - ResizeGrip;
-        int hit = 0;
-        if (left && top) hit = HTTOPLEFT;
-        else if (right && top) hit = HTTOPRIGHT;
-        else if (left && bottom) hit = HTBOTTOMLEFT;
-        else if (right && bottom) hit = HTBOTTOMRIGHT;
-        else if (left) hit = HTLEFT;
-        else if (right) hit = HTRIGHT;
-        else if (top) hit = HTTOP;
-        else if (bottom) hit = HTBOTTOM;
-        if (hit == 0) return IntPtr.Zero;
-        handled = true;
-        return new IntPtr(hit);
-    }
-
-    bool IsOnResizeEdge(Point p)
-    {
-        return p.X <= ResizeGrip || p.Y <= ResizeGrip || p.X >= ActualWidth - ResizeGrip || p.Y >= ActualHeight - ResizeGrip;
-    }
-
-    static bool IsOnScreen(double left, double top, double width, double height)
-    {
-        if (double.IsNaN(left) || double.IsNaN(top) || width <= 0 || height <= 0) return false;
-        double vsL = SystemParameters.VirtualScreenLeft, vsT = SystemParameters.VirtualScreenTop;
-        double vsR = vsL + SystemParameters.VirtualScreenWidth, vsB = vsT + SystemParameters.VirtualScreenHeight;
-        // Require at least 50×50 px visible
-        return left + width - 50 > vsL && left + 50 < vsR && top + height - 50 > vsT && top + 50 < vsB;
-    }
-
-    internal static RadialGradientBrush GlowBrush(Color color)
-    {
-        RadialGradientBrush brush = new RadialGradientBrush();
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(190, color.R, color.G, color.B), 0));
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(72, color.R, color.G, color.B), 0.42));
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1));
-        return brush;
-    }
-
-    static DropShadowEffect Glow(Color color, double blur, double opacity)
-    {
-        return new DropShadowEffect { Color = color, BlurRadius = blur, ShadowDepth = 0, Opacity = opacity };
-    }
-
-    internal static string FormatResetCountdown(DateTime? resetAt)
-    {
-        if (!resetAt.HasValue) return "--";
-        TimeSpan left = resetAt.Value - DateTime.Now;
-        if (left.TotalSeconds <= 0) return "now";
-        if (left.TotalHours >= 1) return ((int)left.TotalHours) + "h " + left.Minutes + "m";
-        return left.Minutes + "m";
-    }
-    internal static string FormatTokens(long value)
-    {
-        if (value >= 1000000000L) return (value / 1000000000.0).ToString("0.00") + "B";
-        if (value >= 1000000L) return (value / 1000000.0).ToString("0.00") + "M";
-        if (value >= 1000L) return (value / 1000.0).ToString("0.0") + "K";
-        return value.ToString();
-    }
 }
 
 interface INotifyIconBackend
@@ -1725,7 +1465,7 @@ class TrayController : IDisposable
         System.Windows.Forms.MenuItem settingsItem = new System.Windows.Forms.MenuItem("设置…");
         settingsItem.Click += delegate
         {
-            LiquidWindow.ShowProviderSettings(_settings);
+            SettingsDialog.ShowProviderSettings(_settings);
             _popup.Height = PopupWindow.DesiredHeight(_settings);
         };
 
@@ -1813,7 +1553,28 @@ static class Program
     [STAThread]
     static void Main()
     {
+        DashboardSettings settings = DashboardSettings.Load();
         Application app = new Application();
-        app.Run(new LiquidWindow());
+        app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+        Window bootstrapper = new Window { Width = 0, Height = 0, ShowInTaskbar = false, Visibility = Visibility.Hidden, WindowStyle = WindowStyle.None };
+        bootstrapper.Show();
+        bootstrapper.Hide();
+
+        PopupWindow popup = new PopupWindow(settings);
+        TrayIconBackend backend = new TrayIconBackend();
+        TrayController controller = new TrayController(settings, backend, popup);
+
+        app.Exit += delegate { controller.Dispose(); };
+
+        if (settings.popupStickyOnLaunch)
+        {
+            popup.EnterSticky();
+            popup.Left = double.IsNaN(settings.popupLeft) ? SystemParameters.WorkArea.Right - popup.Width - 8 : settings.popupLeft;
+            popup.Top = double.IsNaN(settings.popupTop) ? SystemParameters.WorkArea.Top + 72 : settings.popupTop;
+            popup.Show();
+        }
+
+        app.Run(bootstrapper);
     }
 }
