@@ -1108,7 +1108,7 @@ class PopupWindow : Window
         fill.Width = Math.Max(4, width * Math.Max(0, Math.Min(100, remaining)) / 100.0);
     }
 
-    static double DesiredHeight(DashboardSettings s)
+    public static double DesiredHeight(DashboardSettings s)
     {
         double h = 62;
         if (s.codex != null && s.codex.enabled) h += 17 + 3 + 55;
@@ -1222,7 +1222,7 @@ class LiquidWindow : Window
 
         ContextMenu menu = new ContextMenu();
         MenuItem refresh = new MenuItem(); refresh.Header = "刷新"; refresh.Click += delegate { StartRefresh(); };
-        MenuItem providerSettings = new MenuItem(); providerSettings.Header = "设置..."; providerSettings.Click += delegate { ShowProviderSettings(); };
+        MenuItem providerSettings = new MenuItem(); providerSettings.Header = "设置..."; providerSettings.Click += delegate { ShowProviderSettings(settings); };
         MenuItem topmost = new MenuItem(); topmost.Header = "置顶"; topmost.Click += delegate { Topmost = !Topmost; };
         MenuItem exit = new MenuItem(); exit.Header = "退出"; exit.Click += delegate { Close(); };
         menu.Items.Add(refresh); menu.Items.Add(providerSettings); menu.Items.Add(new Separator()); menu.Items.Add(topmost); menu.Items.Add(exit);
@@ -1293,10 +1293,12 @@ class LiquidWindow : Window
         return h + 30; // grid margin (16+14)
     }
 
-    void ShowProviderSettings()
+    public static void ShowProviderSettings(DashboardSettings settings)
     {
         DashboardSettings candidate = DashboardSettings.Load();
-        Window dialog = new Window { Title = "设置", Width = 460, Height = 700, MinWidth = 400, MinHeight = 540, WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = this, ResizeMode = ResizeMode.CanResize, Background = new SolidColorBrush(Color.FromRgb(31, 36, 48)), Foreground = Brushes.White };
+        Window dialog = new Window { Title = "设置", Width = 460, Height = 700, MinWidth = 400, MinHeight = 540, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.CanResize, Background = new SolidColorBrush(Color.FromRgb(31, 36, 48)), Foreground = Brushes.White };
+        Application app = Application.Current;
+        if (app != null && app.MainWindow != null) dialog.Owner = app.MainWindow;
         ScrollViewer scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         StackPanel panel = new StackPanel { Margin = new Thickness(20) }; scroll.Content = panel; dialog.Content = scroll;
 
@@ -1340,7 +1342,7 @@ class LiquidWindow : Window
             candidate.minimax.enabled = miniEnabled.IsChecked == true; candidate.minimax.mmxPath = mmxPath.Text.Trim(); candidate.minimax.quotaModelName = miniModel.Text.Trim();
             candidate.deepseek.enabled = deepEnabled.IsChecked == true; candidate.deepseek.balanceMode = DashboardSettings.NormalizeBalanceMode(Convert.ToString(mode.SelectedItem)); candidate.deepseek.currency = Convert.ToString(currency.SelectedItem); candidate.deepseek.manualBalance = manualValue; candidate.deepseek.referenceBudget = budgetValue;
             try { candidate.Save(); } catch { MessageBox.Show(dialog, "设置保存失败，请检查磁盘权限。", "设置", MessageBoxButton.OK, MessageBoxImage.Error); return; }
-            settings = candidate; Height = DesiredHeight(); Content = BuildUi(); ApplyPercentEffects(); StartRefresh(); dialog.Close();
+            settings.codex.enabled = candidate.codex.enabled; settings.minimax.enabled = candidate.minimax.enabled; settings.minimax.mmxPath = candidate.minimax.mmxPath; settings.minimax.quotaModelName = candidate.minimax.quotaModelName; settings.deepseek.enabled = candidate.deepseek.enabled; settings.deepseek.balanceMode = candidate.deepseek.balanceMode; settings.deepseek.currency = candidate.deepseek.currency; settings.deepseek.manualBalance = candidate.deepseek.manualBalance; settings.deepseek.referenceBudget = candidate.deepseek.referenceBudget; dialog.Close();
         };
         buttons.Children.Add(cancel); buttons.Children.Add(save); panel.Children.Add(buttons); dialog.ShowDialog();
     }
@@ -1704,6 +1706,42 @@ class TrayController : IDisposable
             _backend.Show();
         }
         catch { /* fallback: handled in Task 9 if tray unavailable */ }
+
+        System.Windows.Forms.ContextMenu menu = new System.Windows.Forms.ContextMenu();
+        System.Windows.Forms.MenuItem pinItem = new System.Windows.Forms.MenuItem("钉住 popup");
+        pinItem.Click += delegate
+        {
+            if (!_popup.IsSticky)
+            {
+                _popup.EnterSticky();
+                if (!double.IsNaN(_settings.popupLeft)) _popup.Left = _settings.popupLeft;
+                if (!double.IsNaN(_settings.popupTop)) _popup.Top = _settings.popupTop;
+                _popup.Show();
+            }
+            pinItem.Checked = _popup.IsSticky;
+        };
+        menu.Popup += delegate { pinItem.Checked = _popup.IsSticky; };
+
+        System.Windows.Forms.MenuItem settingsItem = new System.Windows.Forms.MenuItem("设置…");
+        settingsItem.Click += delegate
+        {
+            LiquidWindow.ShowProviderSettings(_settings);
+            _popup.Height = PopupWindow.DesiredHeight(_settings);
+        };
+
+        System.Windows.Forms.MenuItem exitItem = new System.Windows.Forms.MenuItem("退出");
+        exitItem.Click += delegate { System.Windows.Application.Current.Shutdown(); };
+
+        menu.MenuItems.Add(pinItem);
+        menu.MenuItems.Add(settingsItem);
+        menu.MenuItems.Add(new System.Windows.Forms.MenuItem("-"));
+        menu.MenuItems.Add(exitItem);
+
+        TrayIconBackend tib = backend as TrayIconBackend;
+        System.Windows.Forms.NotifyIcon ni = tib == null ? null : tib._icon;
+        if (ni != null) ni.ContextMenu = menu;
+
+        _backend.Click += delegate { ShowPopup(); };
     }
 
     void OnTrayMouseMove()
