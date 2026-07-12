@@ -2,28 +2,64 @@
 
 ## 架构
 
-单文件 WPF (`Program.cs`，~1078 行)，`csc.exe` 编译，零外部依赖。
+单文件 WPF (`Program.cs`，~1580 行)，`csc.exe` 编译，零外部依赖。
 
 ```
 Program.cs
-├── enum ProviderSource              — OfficialApi/Cli/Manual/LocalEstimate/Cached
-├── static class NativeSqlite        — SQLite 只读，state_5.sqlite
-├── class UsageSnapshot             — Codex token 估算
-├── class QuotaSnapshot             — Codex 配额快照
-├── class MiniMaxSnapshot           — MiniMax 配额快照（含 Source + RemainsTime）
-├── class DeepSeekSnapshot          — DeepSeek 余额快照（含 Source）
-├── static class ProviderMath       — 百分比/成本计算
-├── class DashboardSettings         — JSON 设置读写 + balanceMode 归一化
-├── class MiniMaxCommand            — CLI 命令模型
-├── static class MiniMaxQuota       — mmx CLI 调用 + 解析
-│   └── static class MiniMaxTime    — 时间格式化（分 CLI/API 源）
-├── static class MiniMaxRemainsApi  — Token Plan API
-├── static class WindowsCredentialStore — advapi32 凭据读写
-├── static class DeepSeekBalance    — api.deepseek.com/user/balance
-├── class ProcessResult / ProcessRunner — 进程包装
-├── static class CodexAppServerQuota — codex app-server JSON-RPC（finally 清理 + JSON id 解析）
-└── class LiquidWindow : Window     — WPF 主窗口
+├── enum ProviderSource
+├── static class NativeSqlite
+├── class UsageSnapshot / QuotaSnapshot / MiniMaxSnapshot / DeepSeekSnapshot
+├── static class ProviderMath
+├── static class DashboardState           — 数据共享层
+├── class DashboardSettings + *Settings 子类
+├── class HistoryPoint / HistoryRing
+├── static class BarColors
+├── static class MiniMaxQuota (+ MiniMaxRemainsApi, MiniMaxTime)
+├── static class WindowsCredentialStore
+├── static class DeepSeekBalance
+├── static class ProcessRunner
+├── static class CodexAppServerQuota
+├── static class BitmapFactory            — 程序生成托盘图标
+├── interface INotifyIconBackend
+├── class TrayIconBackend                 — NotifyIcon 包装
+├── class Bindings                        — UI 控件引用集合
+├── static class BuildUiFactory           — 视觉树工厂
+├── class PopupWindow : Window            — 按需显示的仪表盘弹窗
+├── class TrayController                  — 托盘、菜单和计时器状态机
+├── static class SettingsDialog           — Provider 设置对话框
+└── static class Program
 ```
+
+## 托盘 + 弹窗模式
+
+### 启动序列
+
+1. `Program.Main()` 加载 `DashboardSettings`，并将 WPF 的 `ShutdownMode` 设为 `OnExplicitShutdown`。
+2. 隐藏的 bootstrapper 窗口初始化 WPF Dispatcher；随后创建 `PopupWindow`、`TrayIconBackend` 和 `TrayController`。
+3. `TrayController` 生成并显示托盘图标、绑定菜单和计时器。默认启动时只显示托盘图标；仅当 `popupStickyOnLaunch=true` 时才以 Sticky 状态显示弹窗。
+4. `PopupWindow` 在后台持续刷新 `DashboardState`，即使弹窗隐藏，时钟和 Provider 数据也会继续更新。
+
+### Unsticky 与 Sticky
+
+- **Unsticky**：弹窗不置顶。悬停或单击托盘图标可显示弹窗；离开托盘和弹窗后会延迟隐藏。
+- **Sticky**：单击弹窗中的 📌，或选择托盘菜单的“钉住 popup”，会将 `IsSticky` 设为 `true` 并开启 `Topmost`。Sticky 状态不受离开计时器影响。
+- Sticky 弹窗失去激活时会调用 `LeaveSticky()`：取消置顶、恢复 Unsticky，并隐藏弹窗。
+- 显示时优先恢复已保存且仍在屏幕范围内的 `popupLeft` / `popupTop`；否则停靠工作区右下角。拖动后以 500ms debounce 保存位置。
+
+### Hover / leave 计时器
+
+- 托盘收到 `MouseMove` 且弹窗不可见时启动 hover timer，默认 `popupHoverDelayMs=400`；到时显示弹窗。
+- `NotifyIcon` 没有可靠的 MouseLeave，因此每 100ms 轮询鼠标位置。离开托盘区域、且鼠标不在 Unsticky 弹窗上时，启动 dismiss timer。
+- 鼠标进入弹窗会停止 dismiss timer；离开 Unsticky 弹窗时重新启动。默认 `popupDismissDelayMs=300`，到时隐藏弹窗。
+
+### 关闭与退出
+
+| 操作 | 结果 |
+|---|---|
+| Unsticky 状态离开托盘/弹窗 | 仅隐藏弹窗，托盘和后台刷新继续运行 |
+| Sticky 弹窗失去激活 | 取消 Sticky 和置顶，并隐藏弹窗 |
+| Sticky 状态收到窗口关闭请求 | 取消关闭并隐藏弹窗，应用继续驻留托盘 |
+| 托盘菜单“退出” | 显式关闭应用；停止计时器、关闭弹窗并释放 NotifyIcon |
 
 ## Provider source 和 stale 模型
 

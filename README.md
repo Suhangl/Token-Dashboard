@@ -20,6 +20,7 @@ Right-click the widget → **Settings** to configure providers.
 
 ## Features
 
+- System tray with hover-to-peek popup; pin via 📌 to keep visible
 - Borderless always-on-top panel with DWM Acrylic glass
 - **Codex**: 5h + weekly quota via local `app-server` JSON-RPC; token estimate from SQLite
 - **MiniMax**: 5h + weekly percentage via `mmx` CLI or Token Plan remains API
@@ -59,7 +60,7 @@ No telemetry. API keys stored in **Windows Credential Manager**, never in `setti
 - [x] Stale-data tracking & source tagging
 - [x] Window position/size/topmost persistence
 - [ ] Configurable refresh interval in UI
-- [ ] Tray icon with minimize-to-tray
+- [x] Tray icon with minimize-to-tray
 - [ ] Hook-driven Codex status (working/approval/idle)
 
 ---
