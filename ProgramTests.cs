@@ -160,12 +160,44 @@ static class ProgramTests
         Expect(trayIcon != null, "BitmapFactory.CreateTrayIcon returns non-null icon");
         Expect(trayIcon.Width == 16 && trayIcon.Height == 16, "tray icon is 16x16");
 
-        // --- TrayController construction (Task 5) ---
-        // NOTE: TrayController needs Dispatcher + Application.Current for the real NotifyIcon
-        // path. In console test mode (Application.Current == null), we rely on build.ps1
-        // success as the smoke check. Re-enable an in-process fake when Task 6 lands.
+        // --- TrayController + PopupWindow integration (Task 6) ---
+        // TrayController's timer state machine (hover, dismiss, cursor-poll) drives on
+        // the WPF Dispatcher; the brief acknowledges that full coverage needs an
+        // interactive smoke run. We CAN still verify the constructor wires
+        // backend.SetIcon + backend.Show synchronously with a fake backend.
+        FakeBackend trayFake = new FakeBackend();
+        DashboardSettings traySettings = new DashboardSettings { codex = new CodexSettings { enabled = true } };
+        PopupWindow trayPopup = new PopupWindow(traySettings);
+        trayPopup.Show();
+        WaitForDispatcher(50);
+        int showCountBefore = trayFake.ShowCount;
+        int setIconCountBefore = trayFake.SetIconCount;
+        TrayController trayController = new TrayController(traySettings, trayFake, trayPopup);
+        WaitForDispatcher(20);
+        Expect(trayFake.ShowCount == showCountBefore + 1, "TrayController construction calls backend.Show exactly once");
+        Expect(trayFake.SetIconCount == setIconCountBefore + 1, "TrayController construction calls backend.SetIcon exactly once");
+        Expect(trayController.Popup == trayPopup, "TrayController exposes the Popup instance it was constructed with");
+        trayController.Dispose();
 
         if (failures != 0) Environment.Exit(1);
         Console.WriteLine("Provider self-tests passed");
     }
+}
+
+class FakeBackend : INotifyIconBackend
+{
+    public event System.Windows.Forms.MouseEventHandler MouseMove;
+    public event EventHandler MouseLeave;
+    public event EventHandler Click;
+    public event EventHandler RightClick;
+    public int ShowCount, HideCount, SetIconCount;
+    public void Show() { ShowCount++; }
+    public void Hide() { HideCount++; }
+    public void SetIcon(System.Drawing.Icon icon) { SetIconCount++; }
+    public void SetContextMenu(System.Windows.Forms.ContextMenu menu) { }
+    public void Dispose() { }
+    public void RaiseMouseMove() { var h = MouseMove; if (h != null) h(this, null); }
+    public void RaiseMouseLeave() { var h = MouseLeave; if (h != null) h(this, EventArgs.Empty); }
+    public void RaiseClick() { var h = Click; if (h != null) h(this, EventArgs.Empty); }
+    public void RaiseRightClick() { var h = RightClick; if (h != null) h(this, EventArgs.Empty); }
 }

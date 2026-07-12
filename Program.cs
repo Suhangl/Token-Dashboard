@@ -1660,12 +1660,42 @@ class TrayController : IDisposable
 {
     readonly INotifyIconBackend _backend;
     readonly DashboardSettings _settings;
-    PopupWindow _popup;
+    readonly PopupWindow _popup;
+    readonly DispatcherTimer _hoverTimer;
+    readonly DispatcherTimer _dismissTimer;
+    readonly DispatcherTimer _cursorPollTimer;
+    bool _cursorOverTray;
 
-    public TrayController(DashboardSettings settings, INotifyIconBackend backend)
+    public PopupWindow Popup { get { return _popup; } }
+
+    public TrayController(DashboardSettings settings, INotifyIconBackend backend, PopupWindow popup)
     {
         _settings = settings;
         _backend = backend;
+        _popup = popup;
+        _cursorOverTray = false;
+
+        _hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(settings.popupHoverDelayMs) };
+        _hoverTimer.Tick += delegate { _hoverTimer.Stop(); ShowPopup(); };
+
+        _dismissTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(settings.popupDismissDelayMs) };
+        _dismissTimer.Tick += delegate
+        {
+            _dismissTimer.Stop();
+            if (!_popup.IsSticky) _popup.Hide();
+        };
+
+        // Cursor poll: NotifyIcon has no MouseLeave event; poll Control.MousePosition
+        // every 100ms to detect when the cursor leaves the tray area (bottom 32px of
+        // work area, covering the default Windows taskbar position).
+        _cursorPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _cursorPollTimer.Tick += delegate { OnCursorPollTick(); };
+        _cursorPollTimer.Start();
+
+        _backend.MouseMove += delegate { OnTrayMouseMove(); };
+        _popup.MouseEnter += delegate { _dismissTimer.Stop(); };
+        _popup.MouseLeave += delegate { if (!_popup.IsSticky) _dismissTimer.Start(); };
+
         try
         {
             _backend.SetIcon(BitmapFactory.CreateTrayIcon(
@@ -1676,7 +1706,68 @@ class TrayController : IDisposable
         catch { /* fallback: handled in Task 9 if tray unavailable */ }
     }
 
-    public void Dispose() { if (_popup != null) _popup.Close(); _backend.Dispose(); }
+    void OnTrayMouseMove()
+    {
+        _cursorOverTray = true;
+        if (!_hoverTimer.IsEnabled && !_popup.IsVisible) _hoverTimer.Start();
+    }
+
+    void OnCursorPollTick()
+    {
+        System.Drawing.Point cursor = System.Windows.Forms.Control.MousePosition;
+        bool overTrayArea = IsOverTrayArea(cursor);
+        if (_cursorOverTray && !overTrayArea)
+        {
+            _cursorOverTray = false;
+            if (_popup.IsVisible && !_popup.IsSticky && !_popup.IsMouseOver)
+            {
+                _dismissTimer.Start();
+            }
+        }
+        else if (!_cursorOverTray && overTrayArea)
+        {
+            _cursorOverTray = true;
+        }
+    }
+
+    bool IsOverTrayArea(System.Drawing.Point cursor)
+    {
+        Rect wa = SystemParameters.WorkArea;
+        return cursor.Y >= wa.Bottom - 32 && cursor.Y <= wa.Bottom + 32
+            && cursor.X >= wa.Left && cursor.X <= wa.Right;
+    }
+
+    void ShowPopup()
+    {
+        if (!double.IsNaN(_settings.popupLeft) && !double.IsNaN(_settings.popupTop)
+            && IsOnScreen(_settings.popupLeft, _settings.popupTop, _popup.Width, _popup.Height))
+        {
+            _popup.Left = _settings.popupLeft; _popup.Top = _settings.popupTop;
+        }
+        else
+        {
+            _popup.Left = SystemParameters.WorkArea.Right - _popup.Width - 8;
+            _popup.Top = SystemParameters.WorkArea.Bottom - _popup.Height - 8;
+        }
+        _popup.Show();
+    }
+
+    public void Dispose()
+    {
+        _cursorPollTimer.Stop();
+        _hoverTimer.Stop();
+        _dismissTimer.Stop();
+        _popup.Close();
+        _backend.Dispose();
+    }
+
+    static bool IsOnScreen(double left, double top, double width, double height)
+    {
+        if (double.IsNaN(left) || double.IsNaN(top) || width <= 0 || height <= 0) return false;
+        double vsL = SystemParameters.VirtualScreenLeft, vsT = SystemParameters.VirtualScreenTop;
+        double vsR = vsL + SystemParameters.VirtualScreenWidth, vsB = vsT + SystemParameters.VirtualScreenHeight;
+        return left + width - 50 > vsL && left + 50 < vsR && top + height - 50 > vsT && top + 50 < vsB;
+    }
 }
 
 static class Program
