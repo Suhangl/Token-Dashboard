@@ -62,6 +62,20 @@ static class ProgramTests
         Expect(ds.windowTopmost, "new settings default to topmost");
         Expect(ds.windowWidth == 0 && ds.windowHeight == 0, "new settings have zero stored size");
 
+        // --- Tray + Popup settings defaults ---
+        DashboardSettings fresh = new DashboardSettings();
+        Expect(fresh.popupDismissDelayMs == 300, "popupDismissDelayMs default 300");
+        Expect(fresh.popupHoverDelayMs == 400, "popupHoverDelayMs default 400");
+        Expect(double.IsNaN(fresh.popupLeft) && double.IsNaN(fresh.popupTop), "popupLeft/Top default NaN");
+        Expect(!fresh.popupStickyOnLaunch, "popupStickyOnLaunch default false");
+
+        // --- Legacy field tolerance: parse old-format JSON directly via JavaScriptSerializer ---
+        string legacyJson = "{\"windowTopmost\":true,\"windowLeft\":100,\"windowTop\":200,\"windowWidth\":400,\"windowHeight\":300,\"glass\":{\"cornerRadius\":10},\"codex\":{\"enabled\":true}}";
+        DashboardSettings loaded = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<DashboardSettings>(legacyJson);
+        Expect(loaded != null, "legacy settings.json deserializes without exception");
+        Expect(loaded.popupDismissDelayMs == 300, "legacy load falls back to default popupDismissDelayMs");
+        Expect(!loaded.popupStickyOnLaunch, "legacy load falls back to default popupStickyOnLaunch");
+
         if (failures != 0) Environment.Exit(1);
         Console.WriteLine("Provider self-tests passed");
     }

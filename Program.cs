@@ -214,6 +214,10 @@ class DashboardSettings
     public MiniMaxSettings minimax = new MiniMaxSettings();
     public DeepSeekSettings deepseek = new DeepSeekSettings();
     public GlassSettings glass = new GlassSettings();
+    public int popupDismissDelayMs = 300;
+    public int popupHoverDelayMs = 400;
+    public double popupLeft = double.NaN, popupTop = double.NaN;
+    public bool popupStickyOnLaunch = false;
     static string FilePath { get { return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CodexDashboard", "settings.json"); } }
     public static DashboardSettings Load()
     {
@@ -249,6 +253,29 @@ class DashboardSettings
         File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(this), Encoding.UTF8);
     }
     public static string PathForDisplay { get { return FilePath; } }
+}
+
+static class DashboardState
+{
+    public static event Action Changed;
+    public static UsageSnapshot Usage = new UsageSnapshot(false, 0, 0, 0, 0, "starting");
+    public static QuotaSnapshot CodexQuota = new QuotaSnapshot(false, 0, 0, "starting", null, null);
+    public static MiniMaxSnapshot MiniMax = new MiniMaxSnapshot(false, 0, 0, false, DateTime.MinValue, "not configured", ProviderSource.Cached);
+    public static DeepSeekSnapshot DeepSeek = new DeepSeekSnapshot(false, 0m, 0m, 0m, "CNY", false, DateTime.MinValue, "not configured", ProviderSource.Cached);
+    public static DateTime LastRefreshAt = DateTime.MinValue;
+
+    static void Fire()
+    {
+        Action handler = Changed;
+        if (handler == null) return;
+        System.Windows.Application app = System.Windows.Application.Current;
+        if (app == null) return;
+        app.Dispatcher.BeginInvoke(handler);
+    }
+    public static void SetUsage(UsageSnapshot s) { Usage = s; LastRefreshAt = DateTime.Now; Fire(); }
+    public static void SetCodexQuota(QuotaSnapshot s) { CodexQuota = s; Fire(); }
+    public static void SetMiniMax(MiniMaxSnapshot s) { MiniMax = s; Fire(); }
+    public static void SetDeepSeek(DeepSeekSnapshot s) { DeepSeek = s; Fire(); }
 }
 
 class MiniMaxCommand { public readonly string FileName, Arguments; public MiniMaxCommand(string fileName, string arguments) { FileName = fileName; Arguments = arguments; } }
