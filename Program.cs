@@ -884,6 +884,8 @@ class PopupWindow : Window
     public DashboardSettings Settings;
     public Bindings Bindings;
     DispatcherTimer _saveDebounce;
+    DispatcherTimer _countdownTick;
+    DateTime _nextRefreshAt;
     bool _isSticky;
 
     public bool IsSticky { get { return _isSticky; } }
@@ -918,6 +920,9 @@ class PopupWindow : Window
             if (_isSticky) { e.Cancel = true; Hide(); }
         };
 
+        MouseLeave += delegate { /* handled by TrayController */ };
+        MouseEnter += delegate { /* handled by TrayController */ };
+
         Bindings.timeText.PreviewMouseLeftButtonDown += delegate(object s2, MouseButtonEventArgs e)
         {
             if (e.GetPosition(this).Y <= 24)
@@ -938,7 +943,21 @@ class PopupWindow : Window
         LocationChanged += delegate { _saveDebounce.Stop(); _saveDebounce.Start(); };
 
         DashboardState.Changed += Render;
+        _nextRefreshAt = DateTime.Now.AddSeconds(Settings.refreshSeconds);
+        DashboardState.Changed += delegate { _nextRefreshAt = DateTime.Now.AddSeconds(Settings.refreshSeconds); };
+        _countdownTick = new DispatcherTimer();
+        _countdownTick.Interval = TimeSpan.FromSeconds(1);
+        _countdownTick.Tick += delegate { RenderCountdown(); };
+        _countdownTick.Start();
+        RenderCountdown();
         Render();
+    }
+
+    void RenderCountdown()
+    {
+        if (Bindings == null || Bindings.footerSub == null) return;
+        int seconds = Math.Max(0, (int)Math.Ceiling((_nextRefreshAt - DateTime.Now).TotalSeconds));
+        Bindings.footerSub.Text = "refresh " + seconds + "s";
     }
 
     public void EnterSticky()
@@ -1013,7 +1032,6 @@ class PopupWindow : Window
             Bindings.footerLeft.Text = "";
             Bindings.footerRight.Text = "";
         }
-        Bindings.footerSub.Text = "";
     }
 
     decimal EstimateCost()
