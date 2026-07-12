@@ -629,6 +629,240 @@ static class CodexAppServerQuota
     class LimitWindow { public readonly int DurationMins; public readonly double UsedPercent; public readonly DateTime? ResetsAt; public LimitWindow(int d, double u, DateTime? r) { DurationMins = d; UsedPercent = u; ResetsAt = r; } }
 }
 
+class Bindings
+{
+    public TextBlock timeText, codexHeading, miniHeading, deepSeekHeading;
+    public TextBlock fivePercent, fiveUsed, weekPercent, weekUsed;
+    public TextBlock miniFivePercent, miniFiveUsed, miniWeekPercent, miniWeekUsed;
+    public TextBlock deepSeekPercent, deepSeekUsed, footerLeft, footerRight, footerSub;
+    public System.Windows.Shapes.Ellipse statusDot, statusGlow;
+    public System.Windows.Controls.Border fiveFill, fiveTrack, weekFill, weekTrack;
+    public System.Windows.Controls.Border miniFiveFill, miniFiveTrack, miniWeekFill, miniWeekTrack;
+    public System.Windows.Controls.Border deepSeekFill, deepSeekTrack;
+    public FrameworkElement stickyPinButton;
+}
+
+class BuildResult
+{
+    public UIElement Root;
+    public Bindings Bindings;
+}
+
+static class BuildUiFactory
+{
+    public static BuildResult Build(DashboardSettings settings)
+    {
+        Bindings b = new Bindings();
+        Border shell = new Border();
+        shell.CornerRadius = new CornerRadius(Math.Max(0, Math.Min(30, settings.glass != null ? settings.glass.cornerRadius : 15)));
+        shell.Background = new SolidColorBrush(Color.FromArgb(112, 28, 33, 48));
+        shell.ClipToBounds = true; shell.SnapsToDevicePixels = true;
+
+        Grid grid = new Grid();
+        grid.Margin = new Thickness(20, 16, 20, 14);
+        int row = 0;
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(24) });
+
+        Grid header = new Grid();
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
+        header.ColumnDefinitions.Add(new ColumnDefinition());
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+        Grid lamp = new Grid { Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Left, ClipToBounds = false };
+        b.statusGlow = new System.Windows.Shapes.Ellipse { Width = 17, Height = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        b.statusDot = new System.Windows.Shapes.Ellipse { Width = 5.5, Height = 5.5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        lamp.Children.Add(b.statusGlow); lamp.Children.Add(b.statusDot);
+        b.timeText = MakeText("", 12, 0, 170, 184, 204, FontWeights.SemiBold);
+        b.timeText.HorizontalAlignment = HorizontalAlignment.Center;
+        Grid pinHit = new Grid { Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Right };
+        System.Windows.Shapes.Ellipse pin = new System.Windows.Shapes.Ellipse { Width = 16, Height = 16, Stroke = new SolidColorBrush(Color.FromRgb(230, 230, 230)), StrokeThickness = 1.5, Fill = Brushes.Transparent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        pinHit.Children.Add(pin);
+        ToolTipService.SetToolTip(pinHit, "钉住 popup");
+        b.stickyPinButton = pinHit;
+        Grid.SetColumn(lamp, 0); Grid.SetColumn(b.timeText, 1); Grid.SetColumn(pinHit, 2);
+        header.Children.Add(lamp); header.Children.Add(b.timeText); header.Children.Add(pinHit);
+        Grid.SetRow(header, row++); grid.Children.Add(header);
+
+        AppendProviderSections(grid, settings, b, ref row);
+        AppendFooter(grid, b, row);
+
+        shell.Child = grid;
+        BuildResult result = new BuildResult();
+        result.Root = shell;
+        result.Bindings = b;
+        return result;
+    }
+
+    static void AppendProviderSections(Grid grid, DashboardSettings s, Bindings b, ref int row)
+    {
+        if (s.codex.enabled)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
+            b.codexHeading = AddSectionHeader(grid, row++, "CODEX");
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
+            AddDivider(grid, row++);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(55) });
+            AddCompositeBar(grid, b, row++);
+        }
+
+        if (s.minimax.enabled)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(s.codex.enabled ? 10 : 4) });
+            row++;
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
+            b.miniHeading = AddSectionHeader(grid, row++, "MINIMAX");
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
+            AddDivider(grid, row++);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(55) });
+            AddMiniMaxCompositeBar(grid, b, row++);
+        }
+
+        if (s.deepseek.enabled)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength((s.codex.enabled || s.minimax.enabled) ? 10 : 4) });
+            row++;
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
+            b.deepSeekHeading = AddSectionHeader(grid, row++, "DEEPSEEK");
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
+            AddDivider(grid, row++);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
+            AddMeter(grid, b, row++, "Balance");
+        }
+    }
+
+    static void AppendFooter(Grid grid, Bindings b, int row)
+    {
+        Grid footer = new Grid();
+        footer.RowDefinitions.Add(new RowDefinition()); footer.RowDefinitions.Add(new RowDefinition());
+        footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition());
+        b.footerLeft = MakeText("", 11, 0, 150, 164, 184, FontWeights.Normal);
+        b.footerRight = MakeText("", 11, 0, 158, 174, 196, FontWeights.Normal); b.footerRight.HorizontalAlignment = HorizontalAlignment.Right;
+        b.footerSub = MakeText("", 10.5, 0, 110, 124, 146, FontWeights.Normal); b.footerSub.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(b.footerRight, 1); footer.Children.Add(b.footerLeft); footer.Children.Add(b.footerRight);
+        Grid.SetRow(b.footerSub, 1); Grid.SetColumnSpan(b.footerSub, 2); footer.Children.Add(b.footerSub);
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
+        Grid.SetRow(footer, row); grid.Children.Add(footer);
+    }
+
+    internal static TextBlock MakeText(string text, double size, byte a, byte r, byte g, byte bl, FontWeight weight)
+    {
+        return new TextBlock { Text = text, FontSize = size, Foreground = new SolidColorBrush(Color.FromArgb(a == 0 ? (byte)255 : a, r, g, bl)), FontWeight = weight, VerticalAlignment = VerticalAlignment.Center };
+    }
+
+    static TextBlock AddSectionHeader(Grid parent, int row, string label)
+    {
+        TextBlock heading = MakeText(label, 10.5, 0, 130, 147, 170, FontWeights.SemiBold);
+        heading.VerticalAlignment = VerticalAlignment.Bottom;
+        Grid.SetRow(heading, row); parent.Children.Add(heading);
+        return heading;
+    }
+
+    static void AddDivider(Grid parent, int row)
+    {
+        Border line = new Border { Height = 1, Background = new SolidColorBrush(Color.FromArgb(20, 255, 255, 255)), Margin = new Thickness(0, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetRow(line, row); parent.Children.Add(line);
+    }
+
+    static Border BarTrack(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromArgb(50, 80, 90, 110)), VerticalAlignment = VerticalAlignment.Top }; }
+    static Border BarFill(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top }; }
+
+    static void AddCompositeBar(Grid parent, Bindings b, int row)
+    {
+        Grid block = new Grid();
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+        block.ColumnDefinitions.Add(new ColumnDefinition());
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(18) });
+
+        TextBlock fLabel = MakeText("5H", 13, 0, 232, 240, 250, FontWeights.SemiBold);
+        b.fivePercent = MakeText("--", 14, 0, 248, 251, 255, FontWeights.Bold); b.fivePercent.HorizontalAlignment = HorizontalAlignment.Right;
+        b.fiveUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.fiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(b.fiveUsed, 2); Grid.SetColumn(b.fivePercent, 3);
+        Grid.SetRow(fLabel, 0); Grid.SetRow(b.fiveUsed, 0); Grid.SetRow(b.fivePercent, 0);
+        block.Children.Add(fLabel); block.Children.Add(b.fiveUsed); block.Children.Add(b.fivePercent);
+
+        b.fiveTrack = BarTrack(8); b.fiveFill = BarFill(8);
+        Grid bar5 = new Grid(); bar5.Children.Add(b.fiveTrack); bar5.Children.Add(b.fiveFill);
+        Grid.SetRow(bar5, 1); Grid.SetColumnSpan(bar5, 4); block.Children.Add(bar5);
+
+        b.weekTrack = BarTrack(4); b.weekFill = BarFill(4);
+        Grid barW = new Grid(); barW.Children.Add(b.weekTrack); barW.Children.Add(b.weekFill);
+        Grid.SetRow(barW, 2); Grid.SetColumnSpan(barW, 4); block.Children.Add(barW);
+
+        TextBlock wLabel = MakeText("W", 11, 0, 170, 184, 204, FontWeights.Normal);
+        b.weekPercent = MakeText("--", 12, 0, 210, 220, 230, FontWeights.Bold); b.weekPercent.HorizontalAlignment = HorizontalAlignment.Right;
+        b.weekUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.weekUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(b.weekUsed, 2); Grid.SetColumn(b.weekPercent, 3);
+        Grid.SetRow(wLabel, 3); Grid.SetRow(b.weekUsed, 3); Grid.SetRow(b.weekPercent, 3);
+        block.Children.Add(wLabel); block.Children.Add(b.weekUsed); block.Children.Add(b.weekPercent);
+
+        Grid.SetRow(block, row); parent.Children.Add(block);
+    }
+
+    static void AddMiniMaxCompositeBar(Grid parent, Bindings b, int row)
+    {
+        Grid block = new Grid();
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+        block.ColumnDefinitions.Add(new ColumnDefinition());
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(18) });
+
+        TextBlock fLabel = MakeText("5H", 13, 0, 232, 240, 250, FontWeights.SemiBold);
+        b.miniFivePercent = MakeText("--", 14, 0, 248, 251, 255, FontWeights.Bold); b.miniFivePercent.HorizontalAlignment = HorizontalAlignment.Right;
+        b.miniFiveUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.miniFiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(b.miniFiveUsed, 2); Grid.SetColumn(b.miniFivePercent, 3);
+        Grid.SetRow(fLabel, 0); Grid.SetRow(b.miniFiveUsed, 0); Grid.SetRow(b.miniFivePercent, 0);
+        block.Children.Add(fLabel); block.Children.Add(b.miniFiveUsed); block.Children.Add(b.miniFivePercent);
+
+        b.miniFiveTrack = BarTrack(8); b.miniFiveFill = BarFill(8);
+        Grid bar5 = new Grid(); bar5.Children.Add(b.miniFiveTrack); bar5.Children.Add(b.miniFiveFill);
+        Grid.SetRow(bar5, 1); Grid.SetColumnSpan(bar5, 4); block.Children.Add(bar5);
+
+        b.miniWeekTrack = BarTrack(4); b.miniWeekFill = BarFill(4);
+        Grid barW = new Grid(); barW.Children.Add(b.miniWeekTrack); barW.Children.Add(b.miniWeekFill);
+        Grid.SetRow(barW, 2); Grid.SetColumnSpan(barW, 4); block.Children.Add(barW);
+
+        TextBlock wLabel = MakeText("W", 11, 0, 170, 184, 204, FontWeights.Normal);
+        b.miniWeekPercent = MakeText("--", 12, 0, 210, 220, 230, FontWeights.Bold); b.miniWeekPercent.HorizontalAlignment = HorizontalAlignment.Right;
+        b.miniWeekUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.miniWeekUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(b.miniWeekUsed, 2); Grid.SetColumn(b.miniWeekPercent, 3);
+        Grid.SetRow(wLabel, 3); Grid.SetRow(b.miniWeekUsed, 3); Grid.SetRow(b.miniWeekPercent, 3);
+        block.Children.Add(wLabel); block.Children.Add(b.miniWeekUsed); block.Children.Add(b.miniWeekPercent);
+
+        Grid.SetRow(block, row); parent.Children.Add(block);
+    }
+
+    static void AddMeter(Grid parent, Bindings b, int row, string label, int barH = 6)
+    {
+        Grid line = new Grid();
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+        line.ColumnDefinitions.Add(new ColumnDefinition());
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
+        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
+        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(barH + 4) });
+
+        TextBlock lt = MakeText(label, 13, 0, 232, 240, 250, FontWeights.SemiBold);
+        b.deepSeekPercent = MakeText("--", 14, 0, 248, 251, 255, FontWeights.Bold); b.deepSeekPercent.HorizontalAlignment = HorizontalAlignment.Right;
+        b.deepSeekUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.deepSeekUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(b.deepSeekUsed, 2); Grid.SetColumn(b.deepSeekPercent, 3);
+        line.Children.Add(lt); line.Children.Add(b.deepSeekUsed); line.Children.Add(b.deepSeekPercent);
+
+        b.deepSeekTrack = BarTrack(barH); b.deepSeekFill = BarFill(barH);
+        Grid bg = new Grid(); bg.Children.Add(b.deepSeekTrack); bg.Children.Add(b.deepSeekFill);
+        Grid.SetRow(bg, 1); Grid.SetColumnSpan(bg, 4); line.Children.Add(bg);
+
+        Grid.SetRow(line, row); parent.Children.Add(line);
+    }
+}
+
 class LiquidWindow : Window
 {
     const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
@@ -665,6 +899,7 @@ class LiquidWindow : Window
     Ellipse statusDot, statusGlow;
     Border shell;
     Border fiveFill, weekFill, fiveTrack, weekTrack, miniFiveFill, miniWeekFill, miniFiveTrack, miniWeekTrack, deepSeekFill, deepSeekTrack;
+    FrameworkElement stickyPinButton;
     HistoryRing codex5hHistory = new HistoryRing(32), codexWeekHistory = new HistoryRing(32);
     HistoryRing minimax5hHistory = new HistoryRing(32), minimaxWeekHistory = new HistoryRing(32);
 
@@ -732,86 +967,40 @@ class LiquidWindow : Window
 
     UIElement BuildUi()
     {
-        shell = new Border();
-        shell.CornerRadius = new CornerRadius(15);
-        // Background is set below with glass settings applied
-        // BorderBrush/Thickness removed — the drop shadow + dark gradient define the edge.
-        shell.ClipToBounds = true;
-        shell.SnapsToDevicePixels = true;
-
-        // Content grid uses Margin (not shell.Padding) so the glass overlay
-        // below can extend to the shell's exact rounded outer edge — keeps
-        // the highlight perfectly aligned with the panel.
-        Grid grid = new Grid();
-        grid.Margin = new Thickness(20, 16, 20, 14);
-        int row = 0;
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(24) });
-
-        Grid header = new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition());
-        header.ColumnDefinitions.Add(new ColumnDefinition());
-        Grid lamp = new Grid { Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Left, ClipToBounds = false };
-        statusGlow = new Ellipse { Width = 17, Height = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        statusDot = new Ellipse { Width = 5.5, Height = 5.5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        lamp.Children.Add(statusGlow); lamp.Children.Add(statusDot);
-        timeText = Text("", 12, 0, 170, 184, 204, FontWeights.SemiBold);
-        timeText.HorizontalAlignment = HorizontalAlignment.Right;
-        header.Children.Add(lamp); Grid.SetColumn(timeText, 1); header.Children.Add(timeText);
-        Grid.SetRow(header, row++); grid.Children.Add(header);
-
-        // ===== CODEX section =====
-        if (settings.codex.enabled)
-        {
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
-            codexHeading = AddSectionHeader(grid, row++, "CODEX");
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
-            AddDivider(grid, row++);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(55) });
-            AddCompositeBar(grid, row++, out fivePercent, out fiveUsed, out fiveTrack, out fiveFill, out weekPercent, out weekUsed, out weekTrack, out weekFill);
-        }
-
-        // ===== MINIMAX section =====
-        if (settings.minimax.enabled)
-        {
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(settings.codex.enabled ? 10 : 4) });
-            row++;
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
-            miniHeading = AddSectionHeader(grid, row++, "MINIMAX");
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
-            AddDivider(grid, row++);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(55) });
-            AddCompositeBar(grid, row++, out miniFivePercent, out miniFiveUsed, out miniFiveTrack, out miniFiveFill, out miniWeekPercent, out miniWeekUsed, out miniWeekTrack, out miniWeekFill);
-        }
-
-        // ===== DEEPSEEK section =====
-        if (settings.deepseek.enabled)
-        {
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength((settings.codex.enabled || settings.minimax.enabled) ? 10 : 4) });
-            row++;
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
-            deepSeekHeading = AddSectionHeader(grid, row++, "DEEPSEEK");
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
-            AddDivider(grid, row++);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "Balance", out deepSeekPercent, out deepSeekUsed, out deepSeekTrack, out deepSeekFill);
-        }
-
-        Grid footer = new Grid();
-        footer.RowDefinitions.Add(new RowDefinition()); footer.RowDefinitions.Add(new RowDefinition());
-        footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition());
-        footerLeft = Text("", 11, 0, 150, 164, 184, FontWeights.Normal);
-        footerRight = Text("", 11, 0, 158, 174, 196, FontWeights.Normal); footerRight.HorizontalAlignment = HorizontalAlignment.Right;
-        footerSub = Text("", 10.5, 0, 110, 124, 146, FontWeights.Normal); footerSub.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(footerRight, 1); footer.Children.Add(footerLeft); footer.Children.Add(footerRight);
-        Grid.SetRow(footerSub, 1); Grid.SetColumnSpan(footerSub, 2); footer.Children.Add(footerSub);
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
-        Grid.SetRow(footer, row); grid.Children.Add(footer);
-
-        int cr = Math.Max(0, Math.Min(30, settings.glass.cornerRadius));
-        shell.CornerRadius = new CornerRadius(cr);
-        shell.Background = new SolidColorBrush(Color.FromArgb(112, 28, 33, 48));
-        shell.Child = grid;
-        return shell;
+        BuildResult result = BuildUiFactory.Build(settings);
+        shell = result.Root as Border;
+        Bindings b = result.Bindings;
+        timeText = b.timeText;
+        codexHeading = b.codexHeading;
+        miniHeading = b.miniHeading;
+        deepSeekHeading = b.deepSeekHeading;
+        fivePercent = b.fivePercent;
+        fiveUsed = b.fiveUsed;
+        weekPercent = b.weekPercent;
+        weekUsed = b.weekUsed;
+        miniFivePercent = b.miniFivePercent;
+        miniFiveUsed = b.miniFiveUsed;
+        miniWeekPercent = b.miniWeekPercent;
+        miniWeekUsed = b.miniWeekUsed;
+        deepSeekPercent = b.deepSeekPercent;
+        deepSeekUsed = b.deepSeekUsed;
+        footerLeft = b.footerLeft;
+        footerRight = b.footerRight;
+        footerSub = b.footerSub;
+        statusDot = b.statusDot;
+        statusGlow = b.statusGlow;
+        fiveFill = b.fiveFill;
+        fiveTrack = b.fiveTrack;
+        weekFill = b.weekFill;
+        weekTrack = b.weekTrack;
+        miniFiveFill = b.miniFiveFill;
+        miniFiveTrack = b.miniFiveTrack;
+        miniWeekFill = b.miniWeekFill;
+        miniWeekTrack = b.miniWeekTrack;
+        deepSeekFill = b.deepSeekFill;
+        deepSeekTrack = b.deepSeekTrack;
+        stickyPinButton = b.stickyPinButton;
+        return result.Root;
     }
 
     void ApplyPercentEffects()
@@ -890,92 +1079,6 @@ class LiquidWindow : Window
     static PasswordBox SecretField(StackPanel parent, string label) { parent.Children.Add(new TextBlock { Text = label, Opacity = 0.72, Margin = new Thickness(0, 7, 0, 2) }); PasswordBox box = new PasswordBox { Padding = new Thickness(6, 3, 6, 3) }; parent.Children.Add(box); return box; }
     static ComboBox Choice(StackPanel parent, string label, string[] values, string selected) { parent.Children.Add(new TextBlock { Text = label, Opacity = 0.72, Margin = new Thickness(0, 7, 0, 2) }); ComboBox box = new ComboBox { Padding = new Thickness(4, 2, 4, 2) }; foreach (string value in values) box.Items.Add(value); box.SelectedItem = Array.IndexOf(values, selected) >= 0 ? selected : values[0]; parent.Children.Add(box); return box; }
     static bool TryDecimal(string text, out decimal value) { return decimal.TryParse(text, out value) || decimal.TryParse(text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out value); }
-
-    void AddCompositeBar(Grid parent, int row, out TextBlock fivePct, out TextBlock fiveUsed, out Border fiveTrack, out Border fiveFill,
-                         out TextBlock weekPct, out TextBlock weekUsed, out Border weekTrack, out Border weekFill)
-    {
-        Grid block = new Grid();
-        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
-        block.ColumnDefinitions.Add(new ColumnDefinition());
-        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
-        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });   // 5H text
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });    // 5H bar
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });    // W bar
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(18) });   // W text
-
-        // 5H text row
-        TextBlock fLabel = Text("5H", 13, 0, 232, 240, 250, FontWeights.SemiBold);
-        fivePct = Text("--", 14, 0, 248, 251, 255, FontWeights.Bold); fivePct.HorizontalAlignment = HorizontalAlignment.Right;
-        fiveUsed = Text("", 10, 0, 145, 160, 182, FontWeights.Normal); fiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(fiveUsed, 2); Grid.SetColumn(fivePct, 3);
-        Grid.SetRow(fLabel, 0); Grid.SetRow(fiveUsed, 0); Grid.SetRow(fivePct, 0);
-        block.Children.Add(fLabel); block.Children.Add(fiveUsed); block.Children.Add(fivePct);
-
-        // 5H bar
-        fiveTrack = BarTrack(8); fiveFill = BarFill(8);
-        Grid bar5 = new Grid(); bar5.Children.Add(fiveTrack); bar5.Children.Add(fiveFill);
-        Grid.SetRow(bar5, 1); Grid.SetColumnSpan(bar5, 4); block.Children.Add(bar5);
-
-        // W bar
-        weekTrack = BarTrack(4); weekFill = BarFill(4);
-        Grid barW = new Grid(); barW.Children.Add(weekTrack); barW.Children.Add(weekFill);
-        Grid.SetRow(barW, 2); Grid.SetColumnSpan(barW, 4); block.Children.Add(barW);
-
-        // W text row
-        TextBlock wLabel = Text("W", 11, 0, 170, 184, 204, FontWeights.Normal);
-        weekPct = Text("--", 12, 0, 210, 220, 230, FontWeights.Bold); weekPct.HorizontalAlignment = HorizontalAlignment.Right;
-        weekUsed = Text("", 10, 0, 145, 160, 182, FontWeights.Normal); weekUsed.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(weekUsed, 2); Grid.SetColumn(weekPct, 3);
-        Grid.SetRow(wLabel, 3); Grid.SetRow(weekUsed, 3); Grid.SetRow(weekPct, 3);
-        block.Children.Add(wLabel); block.Children.Add(weekUsed); block.Children.Add(weekPct);
-
-        Grid.SetRow(block, row); parent.Children.Add(block);
-    }
-    Border BarTrack(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromArgb(50, 80, 90, 110)), VerticalAlignment = VerticalAlignment.Top }; }
-    Border BarFill(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top }; }
-
-    void AddMeter(Grid parent, int row, string label, out TextBlock pct, out TextBlock used, out Border track, out Border fill, int barH = 6)
-    {
-        Grid line = new Grid();
-        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
-        line.ColumnDefinitions.Add(new ColumnDefinition());
-        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
-        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
-        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
-        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(barH + 4) });
-
-        TextBlock lt = Text(label, 13, 0, 232, 240, 250, FontWeights.SemiBold);
-        pct = Text("--", 14, 0, 248, 251, 255, FontWeights.Bold); pct.HorizontalAlignment = HorizontalAlignment.Right;
-        used = Text("", 10, 0, 145, 160, 182, FontWeights.Normal); used.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(used, 2); Grid.SetColumn(pct, 3);
-        line.Children.Add(lt); line.Children.Add(used); line.Children.Add(pct);
-
-        track = BarTrack(barH); fill = BarFill(barH);
-        Grid bg = new Grid(); bg.Children.Add(track); bg.Children.Add(fill);
-        Grid.SetRow(bg, 1); Grid.SetColumnSpan(bg, 4); line.Children.Add(bg);
-
-        Grid.SetRow(line, row); parent.Children.Add(line);
-    }
-
-    TextBlock AddSectionHeader(Grid parent, int row, string label)
-    {
-        TextBlock heading = Text(label, 10.5, 0, 130, 147, 170, FontWeights.SemiBold);
-        heading.VerticalAlignment = VerticalAlignment.Bottom;
-        Grid.SetRow(heading, row); parent.Children.Add(heading);
-        return heading;
-    }
-
-    void AddDivider(Grid parent, int row)
-    {
-        Border line = new Border { Height = 1, Background = new SolidColorBrush(Color.FromArgb(20, 255, 255, 255)), Margin = new Thickness(0, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetRow(line, row); parent.Children.Add(line);
-    }
-
-    TextBlock Text(string text, double size, byte a, byte r, byte g, byte b, FontWeight weight)
-    {
-        return new TextBlock { Text = text, FontSize = size, Foreground = new SolidColorBrush(Color.FromArgb(a == 0 ? (byte)255 : a, r, g, b)), FontWeight = weight, VerticalAlignment = VerticalAlignment.Center };
-    }
 
     void StartRefresh()
     {

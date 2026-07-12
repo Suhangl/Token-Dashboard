@@ -11,6 +11,7 @@ static class ProgramTests
         Console.Error.WriteLine("FAIL " + name);
     }
 
+    [STAThread]
     static void Main()
     {
         // --- MiniMax ---
@@ -75,6 +76,30 @@ static class ProgramTests
         Expect(loaded != null, "legacy settings.json deserializes without exception");
         Expect(loaded.popupDismissDelayMs == 300, "legacy load falls back to default popupDismissDelayMs");
         Expect(!loaded.popupStickyOnLaunch, "legacy load falls back to default popupStickyOnLaunch");
+
+        // --- BuildUiFactory builds without throwing for any provider mix ---
+        DashboardSettings[] configs = new DashboardSettings[]
+        {
+            new DashboardSettings { codex = new CodexSettings { enabled = true }, minimax = new MiniMaxSettings { enabled = false }, deepseek = new DeepSeekSettings { enabled = false } },
+            new DashboardSettings { codex = new CodexSettings { enabled = false }, minimax = new MiniMaxSettings { enabled = true }, deepseek = new DeepSeekSettings { enabled = false } },
+            new DashboardSettings { codex = new CodexSettings { enabled = false }, minimax = new MiniMaxSettings { enabled = false }, deepseek = new DeepSeekSettings { enabled = true } },
+            new DashboardSettings { codex = new CodexSettings { enabled = true }, minimax = new MiniMaxSettings { enabled = true }, deepseek = new DeepSeekSettings { enabled = true } }
+        };
+        string[] names = new string[] { "codex only", "minimax only", "deepseek only", "all three" };
+        for (int i = 0; i < configs.Length; i++)
+        {
+            try
+            {
+                BuildResult result = BuildUiFactory.Build(configs[i]);
+                Expect(result.Root != null, "BuildUiFactory " + names[i] + " returns non-null root");
+                Expect(result.Bindings != null, "BuildUiFactory " + names[i] + " returns non-null bindings");
+                Expect(result.Bindings.stickyPinButton != null, "BuildUiFactory " + names[i] + " populates stickyPinButton");
+            }
+            catch (Exception ex)
+            {
+                Expect(false, "BuildUiFactory " + names[i] + " threw: " + ex.Message);
+            }
+        }
 
         if (failures != 0) Environment.Exit(1);
         Console.WriteLine("Provider self-tests passed");
