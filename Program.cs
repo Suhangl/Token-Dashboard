@@ -1590,9 +1590,11 @@ interface INotifyIconBackend
     event System.Windows.Forms.MouseEventHandler MouseMove;
     event EventHandler MouseLeave;
     event EventHandler Click;
+    event EventHandler RightClick;
     void Show();
     void Hide();
     void SetIcon(System.Drawing.Icon icon);
+    void SetContextMenu(System.Windows.Forms.ContextMenu menu);
     void Dispose();
 }
 
@@ -1602,17 +1604,24 @@ class TrayIconBackend : INotifyIconBackend
     public event System.Windows.Forms.MouseEventHandler MouseMove;
     public event EventHandler MouseLeave;
     public event EventHandler Click;
+    public event EventHandler RightClick;
 
     public TrayIconBackend()
     {
         _icon = new System.Windows.Forms.NotifyIcon();
         _icon.MouseMove += delegate(object s, System.Windows.Forms.MouseEventArgs e) { var h = MouseMove; if (h != null) h(s, e); };
         _icon.Click += delegate { var h = Click; if (h != null) h(this, EventArgs.Empty); };
+        _icon.MouseClick += delegate(object s, System.Windows.Forms.MouseEventArgs e)
+        {
+            if (e.Button != System.Windows.Forms.MouseButtons.Right) return;
+            var h = RightClick; if (h != null) h(this, EventArgs.Empty);
+        };
     }
 
     public void Show() { _icon.Visible = true; }
     public void Hide() { _icon.Visible = false; }
     public void SetIcon(System.Drawing.Icon icon) { _icon.Icon = icon; }
+    public void SetContextMenu(System.Windows.Forms.ContextMenu menu) { _icon.ContextMenu = menu; }
     public void Dispose() { _icon.Visible = false; _icon.Dispose(); }
 }
 
@@ -1630,7 +1639,7 @@ static class BitmapFactory
             DrawDot(g, 12, 8, errorDot);
 
             IntPtr hicon = bmp.GetHicon();
-            return System.Drawing.Icon.FromHandle(hicon);
+            return (System.Drawing.Icon)System.Drawing.Icon.FromHandle(hicon).Clone();
         }
     }
 
