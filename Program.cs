@@ -952,7 +952,7 @@ class PopupWindow : Window
         DashboardState.Changed += delegate { _nextRefreshAt = DateTime.Now.AddSeconds(Settings.refreshSeconds); };
         _countdownTick = new DispatcherTimer();
         _countdownTick.Interval = TimeSpan.FromSeconds(1);
-        _countdownTick.Tick += delegate { if (DateTime.Now >= _nextRefreshAt) StartRefresh(); RenderCountdown(); };
+        _countdownTick.Tick += delegate { if (DateTime.Now >= _nextRefreshAt) StartRefresh(); RenderCountdown(); Render(); };
         _countdownTick.Start();
         RenderCountdown();
         Render();
