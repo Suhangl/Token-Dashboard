@@ -206,6 +206,17 @@ class DeepSeekSettings
 }
 class CodexSettings { public bool enabled = true; }
 class GlassSettings { public int cornerRadius = 15; }
+class ActiveSettings
+{
+    public int refreshSeconds;
+    public CodexSettings codex;
+    public MiniMaxSettings minimax;
+    public DeepSeekSettings deepseek;
+    public int popupDismissDelayMs;
+    public int popupHoverDelayMs;
+    public double popupLeft, popupTop;
+    public bool popupStickyOnLaunch;
+}
 class DashboardSettings
 {
     public int refreshSeconds = 60;
@@ -251,7 +262,19 @@ class DashboardSettings
     public void Save()
     {
         string dir = System.IO.Path.GetDirectoryName(FilePath); if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-        File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(this), Encoding.UTF8);
+        ActiveSettings active = new ActiveSettings
+        {
+            refreshSeconds = refreshSeconds,
+            codex = codex,
+            minimax = minimax,
+            deepseek = deepseek,
+            popupDismissDelayMs = popupDismissDelayMs,
+            popupHoverDelayMs = popupHoverDelayMs,
+            popupLeft = popupLeft,
+            popupTop = popupTop,
+            popupStickyOnLaunch = popupStickyOnLaunch
+        };
+        File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(active), Encoding.UTF8);
     }
     public static string PathForDisplay { get { return FilePath; } }
 }
@@ -766,45 +789,22 @@ static class BuildUiFactory
     static Border BarTrack(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromArgb(50, 80, 90, 110)), VerticalAlignment = VerticalAlignment.Top }; }
     static Border BarFill(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top }; }
 
+    enum BarSide { Codex, MiniMax }
+
     static void AddCompositeBar(Grid parent, Bindings b, int row)
     {
-        Grid block = new Grid();
-        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
-        block.ColumnDefinitions.Add(new ColumnDefinition());
-        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
-        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(18) });
-
-        TextBlock fLabel = MakeText("5H", 13, 0, 232, 240, 250, FontWeights.SemiBold);
-        b.fivePercent = MakeText("--", 14, 0, 248, 251, 255, FontWeights.Bold); b.fivePercent.HorizontalAlignment = HorizontalAlignment.Right;
-        b.fiveUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.fiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(b.fiveUsed, 2); Grid.SetColumn(b.fivePercent, 3);
-        Grid.SetRow(fLabel, 0); Grid.SetRow(b.fiveUsed, 0); Grid.SetRow(b.fivePercent, 0);
-        block.Children.Add(fLabel); block.Children.Add(b.fiveUsed); block.Children.Add(b.fivePercent);
-
-        b.fiveTrack = BarTrack(8); b.fiveFill = BarFill(8);
-        Grid bar5 = new Grid(); bar5.Children.Add(b.fiveTrack); bar5.Children.Add(b.fiveFill);
-        Grid.SetRow(bar5, 1); Grid.SetColumnSpan(bar5, 4); block.Children.Add(bar5);
-
-        b.weekTrack = BarTrack(4); b.weekFill = BarFill(4);
-        Grid barW = new Grid(); barW.Children.Add(b.weekTrack); barW.Children.Add(b.weekFill);
-        Grid.SetRow(barW, 2); Grid.SetColumnSpan(barW, 4); block.Children.Add(barW);
-
-        TextBlock wLabel = MakeText("W", 11, 0, 170, 184, 204, FontWeights.Normal);
-        b.weekPercent = MakeText("--", 12, 0, 210, 220, 230, FontWeights.Bold); b.weekPercent.HorizontalAlignment = HorizontalAlignment.Right;
-        b.weekUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.weekUsed.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(b.weekUsed, 2); Grid.SetColumn(b.weekPercent, 3);
-        Grid.SetRow(wLabel, 3); Grid.SetRow(b.weekUsed, 3); Grid.SetRow(b.weekPercent, 3);
-        block.Children.Add(wLabel); block.Children.Add(b.weekUsed); block.Children.Add(b.weekPercent);
-
-        Grid.SetRow(block, row); parent.Children.Add(block);
+        AddCompositeBarImpl(parent, b, row, BarSide.Codex);
     }
 
     static void AddMiniMaxCompositeBar(Grid parent, Bindings b, int row)
     {
+        AddCompositeBarImpl(parent, b, row, BarSide.MiniMax);
+    }
+
+    static void AddCompositeBarImpl(Grid parent, Bindings b, int row, BarSide side)
+    {
+        bool isCodex = side == BarSide.Codex;
+
         Grid block = new Grid();
         block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
         block.ColumnDefinitions.Add(new ColumnDefinition());
@@ -815,27 +815,43 @@ static class BuildUiFactory
         block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });
         block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(18) });
 
-        TextBlock fLabel = MakeText("5H", 13, 0, 232, 240, 250, FontWeights.SemiBold);
-        b.miniFivePercent = MakeText("--", 14, 0, 248, 251, 255, FontWeights.Bold); b.miniFivePercent.HorizontalAlignment = HorizontalAlignment.Right;
-        b.miniFiveUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.miniFiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(b.miniFiveUsed, 2); Grid.SetColumn(b.miniFivePercent, 3);
-        Grid.SetRow(fLabel, 0); Grid.SetRow(b.miniFiveUsed, 0); Grid.SetRow(b.miniFivePercent, 0);
-        block.Children.Add(fLabel); block.Children.Add(b.miniFiveUsed); block.Children.Add(b.miniFivePercent);
+        TextBlock fivePct = MakeText("--", 14, 0, 248, 251, 255, FontWeights.Bold); fivePct.HorizontalAlignment = HorizontalAlignment.Right;
+        TextBlock fiveUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); fiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Border fiveTrack = BarTrack(8); Border fiveFill = BarFill(8);
+        TextBlock weekPct = MakeText("--", 12, 0, 210, 220, 230, FontWeights.Bold); weekPct.HorizontalAlignment = HorizontalAlignment.Right;
+        TextBlock weekUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); weekUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Border weekTrack = BarTrack(4); Border weekFill = BarFill(4);
 
-        b.miniFiveTrack = BarTrack(8); b.miniFiveFill = BarFill(8);
-        Grid bar5 = new Grid(); bar5.Children.Add(b.miniFiveTrack); bar5.Children.Add(b.miniFiveFill);
+        if (isCodex)
+        {
+            b.fivePercent = fivePct; b.fiveUsed = fiveUsed;
+            b.fiveTrack = fiveTrack; b.fiveFill = fiveFill;
+            b.weekPercent = weekPct; b.weekUsed = weekUsed;
+            b.weekTrack = weekTrack; b.weekFill = weekFill;
+        }
+        else
+        {
+            b.miniFivePercent = fivePct; b.miniFiveUsed = fiveUsed;
+            b.miniFiveTrack = fiveTrack; b.miniFiveFill = fiveFill;
+            b.miniWeekPercent = weekPct; b.miniWeekUsed = weekUsed;
+            b.miniWeekTrack = weekTrack; b.miniWeekFill = weekFill;
+        }
+
+        TextBlock fLabel = MakeText("5H", 13, 0, 232, 240, 250, FontWeights.SemiBold);
+        Grid.SetColumn(fiveUsed, 2); Grid.SetColumn(fivePct, 3);
+        Grid.SetRow(fLabel, 0); Grid.SetRow(fiveUsed, 0); Grid.SetRow(fivePct, 0);
+        block.Children.Add(fLabel); block.Children.Add(fiveUsed); block.Children.Add(fivePct);
+
+        Grid bar5 = new Grid(); bar5.Children.Add(fiveTrack); bar5.Children.Add(fiveFill);
         Grid.SetRow(bar5, 1); Grid.SetColumnSpan(bar5, 4); block.Children.Add(bar5);
 
-        b.miniWeekTrack = BarTrack(4); b.miniWeekFill = BarFill(4);
-        Grid barW = new Grid(); barW.Children.Add(b.miniWeekTrack); barW.Children.Add(b.miniWeekFill);
+        Grid barW = new Grid(); barW.Children.Add(weekTrack); barW.Children.Add(weekFill);
         Grid.SetRow(barW, 2); Grid.SetColumnSpan(barW, 4); block.Children.Add(barW);
 
         TextBlock wLabel = MakeText("W", 11, 0, 170, 184, 204, FontWeights.Normal);
-        b.miniWeekPercent = MakeText("--", 12, 0, 210, 220, 230, FontWeights.Bold); b.miniWeekPercent.HorizontalAlignment = HorizontalAlignment.Right;
-        b.miniWeekUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.miniWeekUsed.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(b.miniWeekUsed, 2); Grid.SetColumn(b.miniWeekPercent, 3);
-        Grid.SetRow(wLabel, 3); Grid.SetRow(b.miniWeekUsed, 3); Grid.SetRow(b.miniWeekPercent, 3);
-        block.Children.Add(wLabel); block.Children.Add(b.miniWeekUsed); block.Children.Add(b.miniWeekPercent);
+        Grid.SetColumn(weekUsed, 2); Grid.SetColumn(weekPct, 3);
+        Grid.SetRow(wLabel, 3); Grid.SetRow(weekUsed, 3); Grid.SetRow(weekPct, 3);
+        block.Children.Add(wLabel); block.Children.Add(weekUsed); block.Children.Add(weekPct);
 
         Grid.SetRow(block, row); parent.Children.Add(block);
     }
@@ -923,6 +939,11 @@ class PopupWindow : Window
         Closing += delegate(object s2, CancelEventArgs e)
         {
             if (_isSticky) { e.Cancel = true; Hide(); }
+            else
+            {
+                System.Windows.Application app = System.Windows.Application.Current;
+                if (app != null) app.Shutdown();
+            }
         };
 
         MouseLeave += delegate { /* handled by TrayController */ };
@@ -1429,10 +1450,15 @@ class TrayController : IDisposable
 
         // Cursor poll: NotifyIcon has no MouseLeave event; poll Control.MousePosition
         // every 100ms to detect when the cursor leaves the tray area (bottom 32px of
-        // work area, covering the default Windows taskbar position).
+        // work area, covering the default Windows taskbar position). Only run while
+        // the popup is visible — otherwise the dispatcher wastes cycles.
         _cursorPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _cursorPollTimer.Tick += delegate { OnCursorPollTick(); };
-        _cursorPollTimer.Start();
+        _popup.IsVisibleChanged += delegate
+        {
+            if (_popup.IsVisible) _cursorPollTimer.Start();
+            else _cursorPollTimer.Stop();
+        };
 
         _backend.MouseMove += delegate { OnTrayMouseMove(); };
         _popup.MouseEnter += delegate { _dismissTimer.Stop(); };
