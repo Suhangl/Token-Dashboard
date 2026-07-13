@@ -149,9 +149,18 @@ static class ProgramTests
             pinGrid.RaiseEvent(click);
             Expect(click.Handled, "sticky pin handles click");
             Expect(popup.IsSticky && popup.Topmost, "sticky pin click enters sticky mode");
-            Expect((string)System.Windows.Controls.ToolTipService.GetToolTip(pinGrid) == "已钉住（点击其他窗口取消）", "sticky pin click sets active tooltip");
+            Expect((string)System.Windows.Controls.ToolTipService.GetToolTip(pinGrid) == "已钉住（再次点击 📌 取消）", "sticky pin click sets active tooltip");
             WaitForDispatcher(250);
             Expect(pinFill != null && pinFill.Color == System.Windows.Media.Color.FromRgb(230, 230, 230), "sticky pin animates to filled");
+            // Click again to unsticky (toggle behavior)
+            System.Windows.Input.MouseButtonEventArgs click2 = new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left);
+            click2.RoutedEvent = System.Windows.UIElement.MouseLeftButtonDownEvent;
+            pinGrid.RaiseEvent(click2);
+            Expect(click2.Handled, "sticky pin click-again handles event");
+            Expect(!popup.IsSticky && !popup.Topmost, "sticky pin second click leaves sticky mode");
+            Expect((string)System.Windows.Controls.ToolTipService.GetToolTip(pinGrid) == "钉住 popup", "sticky pin second click restores inactive tooltip");
+            WaitForDispatcher(250);
+            Expect(pinFill != null && pinFill.Color == System.Windows.Media.Colors.Transparent, "sticky pin second click animates back to transparent");
             popup.LeaveSticky();
             Expect(!popup.IsSticky && !popup.Topmost, "LeaveSticky exits sticky mode");
             Expect((string)System.Windows.Controls.ToolTipService.GetToolTip(pinGrid) == "钉住 popup", "LeaveSticky restores inactive tooltip");

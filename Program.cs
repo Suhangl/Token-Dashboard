@@ -1014,11 +1014,17 @@ class PopupWindow : Window
 
         grid.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
         {
-            if (_isSticky) return;
             e.Handled = true;
-            AnimatePin(_pinEllipse, _pinFill, true);
-            EnterSticky();
-            ToolTipService.SetToolTip(_stickyPinGrid, "已钉住（点击其他窗口取消）");
+            if (_isSticky)
+            {
+                LeaveSticky();
+            }
+            else
+            {
+                AnimatePin(_pinEllipse, _pinFill, true);
+                EnterSticky();
+                ToolTipService.SetToolTip(_stickyPinGrid, "已钉住（再次点击 📌 取消）");
+            }
         };
     }
 
@@ -1560,8 +1566,16 @@ class TrayController : IDisposable
         }
         else
         {
+            // Default position: bottom-right of work area, anchored above where the
+            // auto-hidden taskbar might appear. When the taskbar is visible,
+            // WorkArea.Bottom is its top edge (use it directly); when the taskbar is
+            // auto-hidden, WorkArea.Bottom equals PrimaryScreenHeight, so we reserve
+            // MaxTaskbarReserve pixels at the bottom to keep the popup visible.
+            const double MaxTaskbarReserve = 64;
+            double bottomLimit = Math.Min(SystemParameters.WorkArea.Bottom,
+                SystemParameters.PrimaryScreenHeight - MaxTaskbarReserve);
             _popup.Left = SystemParameters.WorkArea.Right - _popup.Width - 8;
-            _popup.Top = SystemParameters.WorkArea.Bottom - _popup.Height - 8;
+            _popup.Top = bottomLimit - _popup.Height - 8;
         }
         _popup.Show();
     }
