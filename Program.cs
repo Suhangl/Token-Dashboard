@@ -1537,8 +1537,13 @@ class TrayController : IDisposable
     bool IsOverTrayArea(System.Drawing.Point cursor)
     {
         Rect wa = SystemParameters.WorkArea;
-        return cursor.Y >= wa.Bottom - 32 && cursor.Y <= wa.Bottom + 32
-            && cursor.X >= wa.Left && cursor.X <= wa.Right;
+        // Default taskbar-at-bottom layout: tray icons sit in the right portion of the
+        // taskbar. Use cursor.Y >= wa.Bottom - 16 so any vertical position within the
+        // taskbar (default 48-56px tall, customizable) and a small margin above are
+        // treated as "still near the tray icon". Slight cursor drift on the taskbar must
+        // not trigger dismiss — the user has to deliberately leave the tray area.
+        return cursor.Y >= wa.Bottom - 16
+            && cursor.X >= wa.Right - 200;
     }
 
     void ShowPopup()
