@@ -68,6 +68,13 @@ static class ProgramTests
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"id\":2}") == 2, "JSON-RPC id:2");
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"id\": 2}") == 2, "JSON-RPC id: 2 (spaces)");
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"result\":{},\"id\":2}") == 2, "JSON-RPC id after result");
+
+        // --- Codex quota Parse: newer API responses only carry the weekly window ---
+        QuotaSnapshot weeklyOnly = CodexAppServerQuota.ParseForTest("{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":0,\"windowDurationMins\":10080,\"resetsAt\":1784557641},\"secondary\":null,\"credits\":{\"hasCredits\":false,\"unlimited\":false,\"balance\":\"0\"},\"planType\":\"plus\"}}}");
+        Expect(weeklyOnly != null, "Codex Parse handles weekly-only response");
+        Expect(weeklyOnly.Available, "Codex weekly-only is available");
+        Expect(weeklyOnly.WeeklyRemainingPercent == 100, "Codex weekly-only: week from primary 0% used");
+        Expect(weeklyOnly.FiveHourRemainingPercent == 100, "Codex weekly-only: 5h defaults to 100 when no secondary");
         Expect(CodexAppServerQuota.ParseJsonRpcId("not json") == null, "JSON-RPC ignores non-JSON");
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"id\":1}") == 1, "JSON-RPC id:1 (not target)");
 

@@ -525,6 +525,7 @@ static class ProcessRunner
 
 static class CodexAppServerQuota
 {
+    internal static QuotaSnapshot ParseForTest(string text) { return Parse(text); }
 
     static string FindCodexExe()
     {
@@ -625,7 +626,11 @@ static class CodexAppServerQuota
             if (w.DurationMins == 300) { five = remaining; fiveReset = w.ResetsAt; }
             if (w.DurationMins == 10080) { week = remaining; weekReset = w.ResetsAt; }
         }
-        if (!five.HasValue || !week.HasValue) return null;
+        // Newer Codex API responses only carry the weekly window (DurationMins=10080); the
+        // 5h window was removed. Default 5h to 100 (no separate 5h cap) so the popup shows a
+        // sensible value instead of "--" for the 5h row.
+        if (!five.HasValue) { five = 100; fiveReset = null; }
+        if (!week.HasValue) return null;
         return new QuotaSnapshot(true, five.Value, week.Value, "codex app-server", fiveReset, weekReset);
     }
 
