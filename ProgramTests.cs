@@ -28,21 +28,6 @@ static class ProgramTests
         System.Windows.Threading.Dispatcher.PushFrame(frame);
     }
 
-    static long IconPixelSignature(System.Drawing.Icon icon)
-    {
-        using (System.Drawing.Bitmap bitmap = icon.ToBitmap())
-        {
-            unchecked
-            {
-                long signature = 17;
-                for (int y = 0; y < bitmap.Height; y++)
-                    for (int x = 0; x < bitmap.Width; x++)
-                        signature = signature * 31 + bitmap.GetPixel(x, y).ToArgb();
-                return signature;
-            }
-        }
-    }
-
     static bool IsDisposedIcon(System.Drawing.Icon icon)
     {
         if (icon == null) return true;
@@ -87,6 +72,18 @@ static class ProgramTests
         foreach (Delegate handler in handlers.GetInvocationList())
             if (object.ReferenceEquals(handler.Target, target)) return true;
         return false;
+    }
+
+    static int DashboardStateTrayControllerTargetCount()
+    {
+        System.Reflection.FieldInfo changed = typeof(DashboardState).GetField(
+            "Changed", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Action handlers = changed == null ? null : changed.GetValue(null) as Action;
+        if (handlers == null) return 0;
+        int count = 0;
+        foreach (Delegate handler in handlers.GetInvocationList())
+            if (handler.Target is TrayController) count++;
+        return count;
     }
 
     static void RaiseDashboardStateChangedFor(object target)
@@ -443,6 +440,9 @@ static class ProgramTests
             "tray visual clamps negative percentages to zero");
         Expect(new TrayIconVisual(TrayIconVisualKind.Percentage, 105).Percentage == 100,
             "tray visual clamps percentages above 100");
+        Expect(new TrayIconVisual(TrayIconVisualKind.Default, 88).Equals(
+            new TrayIconVisual(TrayIconVisualKind.Default, 0)),
+            "default tray visuals normalize percentage out of their cache identity");
         TrayIconVisual percentage100 = TrayIconState.Select(
             TrayIconMode.Percentage, new QuotaSnapshot(true, true, 100, 50, "ok", null, null));
         Expect(percentage100.Kind == TrayIconVisualKind.Percentage && percentage100.Percentage == 100,
@@ -460,13 +460,80 @@ static class ProgramTests
                     "tray renderer returns the requested deterministic " + traySizes[sizeIndex] + "px icon");
             }
         }
-        using (System.Drawing.Icon icon99 = BitmapFactory.CreateTrayIcon(
-            new TrayIconVisual(TrayIconVisualKind.Percentage, 99), 16))
-        using (System.Drawing.Icon icon100 = BitmapFactory.CreateTrayIcon(percentage100, 16))
+        int invalidTraySizesRejected = 0;
+        foreach (int invalidSize in new[] { 15, 64 })
         {
-            Expect(IconPixelSignature(icon99) != IconPixelSignature(icon100),
-                "exact 100 uses a distinct purpose-built layout instead of 99-plus truncation");
+            try
+            {
+                using (System.Drawing.Icon invalidIcon = BitmapFactory.CreateTrayIcon(percentage72, invalidSize)) { }
+            }
+            catch (ArgumentOutOfRangeException) { invalidTraySizesRejected++; }
         }
+        Expect(invalidTraySizesRejected == 2,
+            "tray renderer rejects sizes outside the bounded 16/20/24/32 set");
+
+        DashboardSettings failureSettings = new DashboardSettings
+        {
+            codex = new CodexSettings { enabled = false },
+            minimax = new MiniMaxSettings { enabled = false },
+            deepseek = new DeepSeekSettings { enabled = false },
+            trayIconMode = "default"
+        };
+        DashboardState.CodexQuota = fiveHour72;
+        PopupWindow constructorFailurePopup = new PopupWindow(failureSettings);
+        bool constructorFailurePopupClosed = false;
+        constructorFailurePopup.Closed += delegate { constructorFailurePopupClosed = true; };
+        FakeBackend constructorFailureBackend = new FakeBackend { ThrowOnSetContextMenu = true };
+        int traySubscriptionsBeforeFailure = DashboardStateTrayControllerTargetCount();
+        bool constructorFailureObserved = false;
+        try
+        {
+            new TrayController(failureSettings, constructorFailureBackend, constructorFailurePopup,
+                delegate(DashboardSettings saved) { });
+        }
+        catch (InvalidOperationException) { constructorFailureObserved = true; }
+        Expect(constructorFailureObserved, "SetContextMenu failure escapes TrayController construction");
+        Expect(DashboardStateTrayControllerTargetCount() == traySubscriptionsBeforeFailure,
+            "failed TrayController construction leaves no static DashboardState subscription");
+        Expect(constructorFailurePopupClosed && constructorFailureBackend.DisposeCount == 1,
+            "failed TrayController construction rolls back popup and backend resources");
+        Expect(constructorFailureBackend.IconHandleWasValidAtDispose
+            && IsDisposedIcon(constructorFailureBackend.CurrentIcon),
+            "failed TrayController construction releases backend borrowing before cached icons");
+
+        PopupWindow backendDisposePopup = new PopupWindow(failureSettings);
+        FakeBackend backendDisposeFailure = new FakeBackend { ThrowOnDispose = true };
+        TrayController backendDisposeController = new TrayController(
+            failureSettings, backendDisposeFailure, backendDisposePopup, delegate(DashboardSettings saved) { });
+        System.Drawing.Icon backendDisposeIcon = backendDisposeFailure.CurrentIcon;
+        bool backendDisposeExceptionObserved = false;
+        try { backendDisposeController.Dispose(); }
+        catch (InvalidOperationException) { backendDisposeExceptionObserved = true; }
+        Expect(backendDisposeExceptionObserved && backendDisposeFailure.DisposeCount == 1,
+            "backend disposal exception escapes after the backend release attempt");
+        Expect(backendDisposeFailure.IconHandleWasValidAtDispose && IsDisposedIcon(backendDisposeIcon),
+            "backend disposal exception cannot prevent cached icon release");
+        Expect(!DashboardStateChangedTargets(backendDisposeController),
+            "backend disposal exception cannot leave a static DashboardState subscription");
+
+        PopupWindow popupCloseFailure = new PopupWindow(failureSettings);
+        FakeBackend popupCloseFailureBackend = new FakeBackend();
+        TrayController popupCloseFailureController = new TrayController(
+            failureSettings, popupCloseFailureBackend, popupCloseFailure, delegate(DashboardSettings saved) { });
+        System.Drawing.Icon popupCloseFailureIcon = popupCloseFailureBackend.CurrentIcon;
+        System.ComponentModel.CancelEventHandler throwingClosing = delegate { throw new InvalidOperationException("close failed"); };
+        popupCloseFailure.Closing += throwingClosing;
+        bool popupCloseExceptionObserved = false;
+        try { popupCloseFailureController.Dispose(); }
+        catch (InvalidOperationException) { popupCloseExceptionObserved = true; }
+        Expect(popupCloseExceptionObserved && popupCloseFailureBackend.DisposeCount == 1,
+            "popup close exception still reaches backend disposal");
+        Expect(popupCloseFailureBackend.IconHandleWasValidAtDispose && IsDisposedIcon(popupCloseFailureIcon),
+            "popup close exception cannot prevent cached icon release");
+        Expect(!DashboardStateChangedTargets(popupCloseFailureController),
+            "popup close exception cannot leave a static DashboardState subscription");
+        popupCloseFailure.Closing -= throwingClosing;
+        popupCloseFailure.Close();
 
         // --- TrayController + PopupWindow integration ---
         // TrayController's timer state machine (hover, dismiss, cursor-poll) drives on
@@ -638,16 +705,22 @@ class FakeBackend : INotifyIconBackend
     public event EventHandler RightClick;
     public int ShowCount, HideCount, SetIconCount, DisposeCount;
     public bool IconHandleWasValidAtDispose;
+    public bool ThrowOnSetContextMenu, ThrowOnDispose;
     public System.Drawing.Icon CurrentIcon;
     public System.Windows.Forms.ContextMenu ContextMenu;
     public void Show() { ShowCount++; }
     public void Hide() { HideCount++; }
     public void SetIcon(System.Drawing.Icon icon) { SetIconCount++; CurrentIcon = icon; }
-    public void SetContextMenu(System.Windows.Forms.ContextMenu menu) { ContextMenu = menu; }
+    public void SetContextMenu(System.Windows.Forms.ContextMenu menu)
+    {
+        ContextMenu = menu;
+        if (ThrowOnSetContextMenu) throw new InvalidOperationException("context menu failed");
+    }
     public void Dispose()
     {
         DisposeCount++;
         IconHandleWasValidAtDispose = CurrentIcon != null && CurrentIcon.Handle != IntPtr.Zero;
+        if (ThrowOnDispose) throw new InvalidOperationException("backend dispose failed");
     }
     public void RaiseMouseMove() { var h = MouseMove; if (h != null) h(this, null); }
     public void RaiseMouseLeave() { var h = MouseLeave; if (h != null) h(this, EventArgs.Empty); }

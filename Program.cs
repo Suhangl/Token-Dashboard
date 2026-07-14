@@ -261,7 +261,9 @@ sealed class TrayIconVisual : IEquatable<TrayIconVisual>
     public TrayIconVisual(TrayIconVisualKind kind, int percentage)
     {
         Kind = kind;
-        Percentage = Math.Max(0, Math.Min(100, percentage));
+        Percentage = kind == TrayIconVisualKind.Default
+            ? 0
+            : Math.Max(0, Math.Min(100, percentage));
     }
 
     public bool Equals(TrayIconVisual other)
@@ -1596,7 +1598,8 @@ static class BitmapFactory
     public static System.Drawing.Icon CreateTrayIcon(TrayIconVisual visual, int size)
     {
         if (visual == null) throw new ArgumentNullException("visual");
-        if (size <= 0) throw new ArgumentOutOfRangeException("size");
+        if (size != 16 && size != 20 && size != 24 && size != 32)
+            throw new ArgumentOutOfRangeException("size", "Tray icons support only 16, 20, 24, or 32 pixels.");
 
         using (System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(size, size))
         using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(bmp))
@@ -1772,7 +1775,10 @@ class TrayController : IDisposable
         _saveSettings = saveSettings ?? delegate { };
         _iconCache = new TrayIconCache();
         _cursorOverTray = false;
+        bool initializationComplete = false;
 
+        try
+        {
         _hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(settings.popupHoverDelayMs) };
         _hoverTimer.Tick += delegate { _hoverTimer.Stop(); ShowPopup(); };
 
@@ -1797,7 +1803,6 @@ class TrayController : IDisposable
         _backend.MouseMove += delegate { OnTrayMouseMove(); };
         _popup.MouseEnter += delegate { _dismissTimer.Stop(); };
         _popup.MouseLeave += delegate { if (!_popup.IsSticky) _dismissTimer.Start(); };
-        DashboardState.Changed += OnDashboardStateChanged;
 
         try
         {
@@ -1807,6 +1812,7 @@ class TrayController : IDisposable
         catch { /* fallback: handled in Task 9 if tray unavailable */ }
 
         System.Windows.Forms.ContextMenu menu = new System.Windows.Forms.ContextMenu();
+        _contextMenu = menu;
         System.Windows.Forms.MenuItem pinItem = new System.Windows.Forms.MenuItem("钉住 popup");
         pinItem.Click += delegate
         {
@@ -1846,10 +1852,16 @@ class TrayController : IDisposable
         menu.MenuItems.Add(new System.Windows.Forms.MenuItem("-"));
         menu.MenuItems.Add(exitItem);
 
-        _contextMenu = menu;
         _backend.SetContextMenu(menu);
 
         _backend.Click += delegate { ShowPopup(); };
+        DashboardState.Changed += OnDashboardStateChanged;
+        initializationComplete = true;
+        }
+        finally
+        {
+            if (!initializationComplete) Dispose();
+        }
     }
 
     void OnDashboardStateChanged()
@@ -2075,13 +2087,37 @@ class TrayController : IDisposable
         if (_disposed) return;
         _disposed = true;
         DashboardState.Changed -= OnDashboardStateChanged;
-        _cursorPollTimer.Stop();
-        _hoverTimer.Stop();
-        _dismissTimer.Stop();
-        _popup.Close();
-        _backend.Dispose();
-        if (_contextMenu != null) _contextMenu.Dispose();
-        _iconCache.Dispose();
+        try
+        {
+            if (_cursorPollTimer != null) _cursorPollTimer.Stop();
+            if (_hoverTimer != null) _hoverTimer.Stop();
+            if (_dismissTimer != null) _dismissTimer.Stop();
+        }
+        finally
+        {
+            try
+            {
+                if (_popup != null) _popup.Close();
+            }
+            finally
+            {
+                try
+                {
+                    if (_backend != null) _backend.Dispose();
+                }
+                finally
+                {
+                    try
+                    {
+                        if (_contextMenu != null) _contextMenu.Dispose();
+                    }
+                    finally
+                    {
+                        if (_iconCache != null) _iconCache.Dispose();
+                    }
+                }
+            }
+        }
     }
 
 }
