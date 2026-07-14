@@ -148,6 +148,35 @@ static class ProviderMath
     }
 }
 
+static class PresentationText
+{
+    public static string TMinus(DateTime? resetAt, DateTime now)
+    {
+        if (!resetAt.HasValue) return "";
+        TimeSpan remaining = resetAt.Value - now;
+        if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
+        int totalHours = (int)remaining.TotalHours;
+        return "\u2212" + totalHours.ToString("00") + ":" + remaining.Minutes.ToString("00");
+    }
+
+    public static string MiniMaxTMinus(string remainingText)
+    {
+        if (string.IsNullOrWhiteSpace(remainingText)) return "";
+        string text = remainingText.Trim().ToLowerInvariant();
+        int hours = 0, minutes = 0;
+        int hourMarker = text.IndexOf('h');
+        int minuteMarker = text.IndexOf('m');
+        if (hourMarker >= 0 && !int.TryParse(text.Substring(0, hourMarker).Trim(), out hours)) return "";
+        int minuteStart = hourMarker >= 0 ? hourMarker + 1 : 0;
+        if (minuteMarker >= minuteStart && !int.TryParse(text.Substring(minuteStart, minuteMarker - minuteStart).Trim(), out minutes)) return "";
+        if (hourMarker < 0 && minuteMarker < 0) return "";
+        if (hours < 0 || minutes < 0) return "";
+        hours += minutes / 60;
+        minutes %= 60;
+        return "\u2212" + hours.ToString("00") + ":" + minutes.ToString("00");
+    }
+}
+
 class HistoryPoint { public DateTime At; public int Percent; public HistoryPoint(DateTime at, int p) { At = at; Percent = p; } }
 
 class HistoryRing
@@ -212,6 +241,7 @@ class DeepSeekSettings
 }
 class CodexSettings { public bool enabled = true; }
 class GlassSettings { public int cornerRadius = 15; }
+enum TrayIconMode { Default, Percentage }
 class ActiveSettings
 {
     public int refreshSeconds;
@@ -222,6 +252,7 @@ class ActiveSettings
     public int popupHoverDelayMs;
     public double popupLeft, popupTop;
     public bool popupStickyOnLaunch;
+    public string trayIconMode;
 }
 class DashboardSettings
 {
@@ -236,6 +267,7 @@ class DashboardSettings
     public int popupHoverDelayMs = 400;
     public double popupLeft = double.NaN, popupTop = double.NaN;
     public bool popupStickyOnLaunch = false;
+    public string trayIconMode = "default";
     static string FilePath { get { return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CodexDashboard", "settings.json"); } }
     public static DashboardSettings Load()
     {
@@ -254,7 +286,15 @@ class DashboardSettings
         if (settings.glass == null) settings.glass = new GlassSettings();
         if (settings.refreshSeconds < 15) settings.refreshSeconds = 60;
         settings.deepseek.balanceMode = NormalizeBalanceMode(settings.deepseek.balanceMode);
+        settings.trayIconMode = NormalizeTrayIconMode(settings.trayIconMode) == TrayIconMode.Percentage ? "percentage" : "default";
         return settings;
+    }
+
+    public static TrayIconMode NormalizeTrayIconMode(string raw)
+    {
+        return string.Equals(raw, "percentage", StringComparison.OrdinalIgnoreCase)
+            ? TrayIconMode.Percentage
+            : TrayIconMode.Default;
     }
 
     public static string NormalizeBalanceMode(string raw)
@@ -278,7 +318,8 @@ class DashboardSettings
             popupHoverDelayMs = popupHoverDelayMs,
             popupLeft = popupLeft,
             popupTop = popupTop,
-            popupStickyOnLaunch = popupStickyOnLaunch
+            popupStickyOnLaunch = popupStickyOnLaunch,
+            trayIconMode = trayIconMode
         };
         File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(active), Encoding.UTF8);
     }
@@ -1153,7 +1194,7 @@ class PopupWindow : Window
             Bindings.weekPercent.Text = quota.WeeklyAvailable ? quota.WeeklyRemainingPercent + "%" : "--";
             Bindings.weekUsed.Text = FormatTokens(usage.WeekTokens);
             Bindings.fiveUsed.Text = quota.FiveHourAvailable
-                ? "resets " + FormatResetCountdown(quota.FiveHourResetsAt)
+                ? PresentationText.TMinus(quota.FiveHourResetsAt, DateTime.Now)
                 : "";
             UpdateMeter(Bindings.fiveFill, Bindings.fiveTrack, quota.FiveHourAvailable, quota.FiveHourRemainingPercent);
             UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.WeeklyAvailable, quota.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
@@ -1162,7 +1203,7 @@ class PopupWindow : Window
         {
             Bindings.miniFivePercent.Text = minimax.Available ? minimax.FiveHourRemainingPercent + "%" : "--";
             Bindings.miniWeekPercent.Text = minimax.Available ? minimax.WeeklyRemainingPercent + "%" : "--";
-            Bindings.miniFiveUsed.Text = !string.IsNullOrEmpty(minimax.RemainsTime) ? "resets " + minimax.RemainsTime : "";
+            Bindings.miniFiveUsed.Text = PresentationText.MiniMaxTMinus(minimax.RemainsTime);
             Bindings.miniWeekUsed.Text = "";
             UpdateMeter(Bindings.miniFiveFill, Bindings.miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent);
             UpdateMeter(Bindings.miniWeekFill, Bindings.miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));

@@ -180,12 +180,42 @@ static class ProgramTests
         Expect(double.IsNaN(fresh.popupLeft) && double.IsNaN(fresh.popupTop), "popupLeft/Top default NaN");
         Expect(!fresh.popupStickyOnLaunch, "popupStickyOnLaunch default false");
 
+        // --- Quiet glass presentation settings ---
+        Expect(fresh.trayIconMode == "default", "trayIconMode defaults to default");
+        Expect(DashboardSettings.NormalizeTrayIconMode("percentage") == TrayIconMode.Percentage,
+            "trayIconMode recognizes percentage");
+        Expect(DashboardSettings.NormalizeTrayIconMode("PeRcEnTaGe") == TrayIconMode.Percentage,
+            "trayIconMode recognition is case-insensitive");
+        Expect(DashboardSettings.NormalizeTrayIconMode(null) == TrayIconMode.Default,
+            "trayIconMode null normalizes to default");
+        Expect(DashboardSettings.NormalizeTrayIconMode("") == TrayIconMode.Default,
+            "trayIconMode empty normalizes to default");
+        Expect(DashboardSettings.NormalizeTrayIconMode("unknown") == TrayIconMode.Default,
+            "trayIconMode unknown normalizes to default");
+
         // --- Legacy field tolerance: parse old-format JSON directly via JavaScriptSerializer ---
         string legacyJson = "{\"windowTopmost\":true,\"windowLeft\":100,\"windowTop\":200,\"windowWidth\":400,\"windowHeight\":300,\"glass\":{\"cornerRadius\":10},\"codex\":{\"enabled\":true}}";
         DashboardSettings loaded = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<DashboardSettings>(legacyJson);
         Expect(loaded != null, "legacy settings.json deserializes without exception");
         Expect(loaded.popupDismissDelayMs == 300, "legacy load falls back to default popupDismissDelayMs");
         Expect(!loaded.popupStickyOnLaunch, "legacy load falls back to default popupStickyOnLaunch");
+        Expect(loaded.trayIconMode == "default", "legacy load falls back to default trayIconMode");
+
+        DashboardSettings trayModeSettings = new DashboardSettings();
+        trayModeSettings.trayIconMode = "percentage";
+        string trayModeJson = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(trayModeSettings);
+        DashboardSettings trayModeBack = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<DashboardSettings>(trayModeJson);
+        Expect(trayModeBack.trayIconMode == "percentage", "trayIconMode round-trip");
+
+        DateTime presentationNow = new DateTime(2026, 7, 15, 10, 0, 0);
+        Expect(PresentationText.TMinus(presentationNow.AddHours(2).AddMinutes(18), presentationNow) == "\u221202:18",
+            "future reset uses compact zero-padded total hours and minutes");
+        Expect(PresentationText.TMinus(null, presentationNow) == "", "null reset omits t-minus copy");
+        Expect(PresentationText.TMinus(presentationNow.AddSeconds(-1), presentationNow) == "\u221200:00",
+            "elapsed reset clamps t-minus to zero");
+        Expect(PresentationText.MiniMaxTMinus("2h 34m") == "\u221202:34",
+            "MiniMax remaining time converts to compact t-minus copy");
+        Expect(PresentationText.MiniMaxTMinus("") == "", "unknown MiniMax remaining time is omitted");
 
         // --- Settings round-trip preserves popupLeft/Top + sticky + timings (Task 3) ---
         DashboardSettings popupSettings = new DashboardSettings();
