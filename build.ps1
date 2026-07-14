@@ -1,6 +1,10 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $out = Join-Path $root "dist"
+$appIcon = Join-Path $root "assets\app-icon.ico"
+if (!(Test-Path -LiteralPath $appIcon -PathType Leaf)) {
+    throw "Application icon not found at '$appIcon'. Run tools\GenerateAppIcon.ps1 before building."
+}
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # Locate C# compiler
@@ -18,6 +22,6 @@ if (!(Test-Path $netfx)) {
     }
 }
 
-& $csc /nologo /target:winexe /optimize+ /out:"$out\CodexDashboard.exe" /reference:System.Web.Extensions.dll /reference:"$netfx\System.Xaml.dll" /reference:"$netfx\WindowsBase.dll" /reference:"$netfx\PresentationCore.dll" /reference:"$netfx\PresentationFramework.dll" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll "$root\Program.cs"
+& $csc /nologo /target:winexe /optimize+ /win32icon:"$appIcon" /out:"$out\CodexDashboard.exe" /reference:System.Web.Extensions.dll /reference:"$netfx\System.Xaml.dll" /reference:"$netfx\WindowsBase.dll" /reference:"$netfx\PresentationCore.dll" /reference:"$netfx\PresentationFramework.dll" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll "$root\Program.cs"
 if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 Write-Host "Built $out\CodexDashboard.exe"
