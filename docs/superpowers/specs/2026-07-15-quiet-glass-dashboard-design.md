@@ -18,8 +18,9 @@ Use the approved **Quiet Glass** direction:
 - Use a low-chroma charcoal glass surface with restrained background blur.
 - Add a subtle translucent gradient, a one-pixel highlight border, and light inner and outer shadows.
 - Avoid nested system blur surfaces. Provider sections remain part of one glass surface.
-- Keep status color localized to status indicators and meter fills.
-- Use subdued green, blue-grey, and neutral slate rather than highly saturated gradients.
+- Keep status color localized to the small status indicator rather than using saturated meter fills.
+- Render available allowance meters with the restrained pale-grey treatment used by the original dashboard concept. A normal meter must remain visibly distinct from the unavailable state.
+- Reserve a solid black meter for unavailable data only.
 - Maintain readable contrast on both light and dark desktop backgrounds.
 
 This is a visual refresh, not a redesign of provider functionality.
@@ -62,7 +63,8 @@ The footer may contain only global state, such as refresh countdown or provider 
 - Do not show the word `reset`.
 - Do not display a reset time for weekly allowance rows.
 - When a 5-hour reset time is unavailable, omit the t-minus value rather than showing a placeholder that suggests a known reset.
-- Preserve the current unavailable-meter behavior: a black meter with no `Unavailable` text.
+- For available data, use a pale-grey fill with enough contrast to show the remaining proportion clearly.
+- Preserve the current unavailable-meter behavior: a solid black meter with no `Unavailable` text.
 
 ## Tray Icon Modes
 
@@ -133,9 +135,16 @@ The smallest sizes use a simplified optical variant so the ring opening and cent
 - Default, percentage, unavailable fallback, and exact `100` tray icon states.
 - Application icon at Explorer small, medium, large, and shortcut sizes.
 
+## Deferred Enhancement: Recent 15-Minute Consumption
+
+A later version may add a brighter-grey overlay that represents allowance consumed during the previous 15 minutes. This is intentionally deferred from the current implementation.
+
+The provider returns current quota snapshots rather than a guaranteed 15-minute consumption series. Supporting this display requires timestamped local samples and delta calculation. The design must also define behavior for application restarts, missing refreshes, server-side corrections, and quota resets before the result can be presented as trustworthy. The future enhancement should be specified and tested separately after the Quiet Glass refresh is stable.
+
 ## Out of Scope
 
 - Recreating Apple Liquid Glass refraction or morphing behavior.
 - Copying Apple, OpenAI, Codex, or SF Symbols visual assets.
 - Changing provider APIs, quota-source rules, or refresh scheduling.
+- Displaying or calculating the previous 15 minutes of allowance consumption.
 - Broad refactoring unrelated to the visual layer and icon lifecycle.
