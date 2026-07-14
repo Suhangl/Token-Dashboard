@@ -4,6 +4,9 @@ static class ProgramTests
 {
     static int failures;
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern int GetGuiResources(IntPtr process, int flags);
+
     static void Expect(bool value, string name)
     {
         if (value) return;
@@ -23,6 +26,86 @@ static class ProgramTests
         };
         timer.Start();
         System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
+
+    static long IconPixelSignature(System.Drawing.Icon icon)
+    {
+        using (System.Drawing.Bitmap bitmap = icon.ToBitmap())
+        {
+            unchecked
+            {
+                long signature = 17;
+                for (int y = 0; y < bitmap.Height; y++)
+                    for (int x = 0; x < bitmap.Width; x++)
+                        signature = signature * 31 + bitmap.GetPixel(x, y).ToArgb();
+                return signature;
+            }
+        }
+    }
+
+    static bool IsDisposedIcon(System.Drawing.Icon icon)
+    {
+        if (icon == null) return true;
+        try
+        {
+            if (icon.Handle == IntPtr.Zero) return true;
+            using (System.Drawing.Bitmap bitmap = icon.ToBitmap()) { }
+            return false;
+        }
+        catch (ObjectDisposedException) { return true; }
+        catch (ArgumentException) { return true; }
+        catch (System.Runtime.InteropServices.ExternalException) { return true; }
+    }
+
+    static System.Windows.Forms.MenuItem FindMenuItem(
+        System.Windows.Forms.Menu menu, string text)
+    {
+        if (menu == null) return null;
+        foreach (System.Windows.Forms.MenuItem item in menu.MenuItems)
+        {
+            if (item.Text == text) return item;
+            System.Windows.Forms.MenuItem nested = FindMenuItem(item, text);
+            if (nested != null) return nested;
+        }
+        return null;
+    }
+
+    static void RaiseContextMenuPopup(System.Windows.Forms.ContextMenu menu)
+    {
+        if (menu == null) return;
+        System.Reflection.MethodInfo onPopup = typeof(System.Windows.Forms.ContextMenu).GetMethod(
+            "OnPopup", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        onPopup.Invoke(menu, new object[] { EventArgs.Empty });
+    }
+
+    static bool DashboardStateChangedTargets(object target)
+    {
+        System.Reflection.FieldInfo changed = typeof(DashboardState).GetField(
+            "Changed", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Action handlers = changed == null ? null : changed.GetValue(null) as Action;
+        if (handlers == null) return false;
+        foreach (Delegate handler in handlers.GetInvocationList())
+            if (object.ReferenceEquals(handler.Target, target)) return true;
+        return false;
+    }
+
+    static void RaiseDashboardStateChangedFor(object target)
+    {
+        System.Reflection.FieldInfo changed = typeof(DashboardState).GetField(
+            "Changed", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Action handlers = changed == null ? null : changed.GetValue(null) as Action;
+        if (handlers == null) return;
+        foreach (Delegate handler in handlers.GetInvocationList())
+        {
+            if (!object.ReferenceEquals(handler.Target, target)) continue;
+            handler.DynamicInvoke();
+        }
+    }
+
+    static int CurrentGdiResourceCount()
+    {
+        using (System.Diagnostics.Process process = System.Diagnostics.Process.GetCurrentProcess())
+            return GetGuiResources(process.Handle, 0);
     }
 
     [STAThread]
@@ -345,30 +428,158 @@ static class ProgramTests
         }
         popup.Close();
 
-        // --- BitmapFactory (Task 5) ---
-        System.Drawing.Icon trayIcon = BitmapFactory.CreateTrayIcon(
-            System.Drawing.ColorTranslator.FromHtml("#74DE80"),
-            System.Drawing.ColorTranslator.FromHtml("#EC5353"));
-        Expect(trayIcon != null, "BitmapFactory.CreateTrayIcon returns non-null icon");
-        Expect(trayIcon.Width == 16 && trayIcon.Height == 16, "tray icon is 16x16");
+        // --- Quiet tray icon state + rendering ---
+        QuotaSnapshot fiveHour72 = new QuotaSnapshot(true, true, 72, 91, "ok", null, null);
+        QuotaSnapshot weeklyOnlyQuota = new QuotaSnapshot(false, true, 88, 91, "weekly only", null, null);
+        TrayIconVisual defaultVisual = TrayIconState.Select(TrayIconMode.Default, fiveHour72);
+        Expect(defaultVisual.Kind == TrayIconVisualKind.Default,
+            "default tray mode always selects the default visual");
+        TrayIconVisual percentage72 = TrayIconState.Select(TrayIconMode.Percentage, fiveHour72);
+        Expect(percentage72.Kind == TrayIconVisualKind.Percentage && percentage72.Percentage == 72,
+            "percentage tray mode selects the available Codex 5-hour percentage");
+        Expect(TrayIconState.Select(TrayIconMode.Percentage, weeklyOnlyQuota).Kind == TrayIconVisualKind.Default,
+            "weekly-only quota falls back immediately to the default tray visual");
+        Expect(new TrayIconVisual(TrayIconVisualKind.Percentage, -5).Percentage == 0,
+            "tray visual clamps negative percentages to zero");
+        Expect(new TrayIconVisual(TrayIconVisualKind.Percentage, 105).Percentage == 100,
+            "tray visual clamps percentages above 100");
+        TrayIconVisual percentage100 = TrayIconState.Select(
+            TrayIconMode.Percentage, new QuotaSnapshot(true, true, 100, 50, "ok", null, null));
+        Expect(percentage100.Kind == TrayIconVisualKind.Percentage && percentage100.Percentage == 100,
+            "tray visual preserves exact 100");
+        Expect(percentage72.Equals(new TrayIconVisual(TrayIconVisualKind.Percentage, 72))
+            && percentage72.GetHashCode() == new TrayIconVisual(TrayIconVisualKind.Percentage, 72).GetHashCode(),
+            "tray visuals are value-equatable");
 
-        // --- TrayController + PopupWindow integration (Task 6) ---
+        int[] traySizes = new[] { 16, 20, 24, 32 };
+        for (int sizeIndex = 0; sizeIndex < traySizes.Length; sizeIndex++)
+        {
+            using (System.Drawing.Icon sizedIcon = BitmapFactory.CreateTrayIcon(percentage72, traySizes[sizeIndex]))
+            {
+                Expect(sizedIcon != null && sizedIcon.Width == traySizes[sizeIndex] && sizedIcon.Height == traySizes[sizeIndex],
+                    "tray renderer returns the requested deterministic " + traySizes[sizeIndex] + "px icon");
+            }
+        }
+        using (System.Drawing.Icon icon99 = BitmapFactory.CreateTrayIcon(
+            new TrayIconVisual(TrayIconVisualKind.Percentage, 99), 16))
+        using (System.Drawing.Icon icon100 = BitmapFactory.CreateTrayIcon(percentage100, 16))
+        {
+            Expect(IconPixelSignature(icon99) != IconPixelSignature(icon100),
+                "exact 100 uses a distinct purpose-built layout instead of 99-plus truncation");
+        }
+
+        // --- TrayController + PopupWindow integration ---
         // TrayController's timer state machine (hover, dismiss, cursor-poll) drives on
         // the WPF Dispatcher; the brief acknowledges that full coverage needs an
         // interactive smoke run. We CAN still verify the constructor wires
         // backend.SetIcon + backend.Show synchronously with a fake backend.
         FakeBackend trayFake = new FakeBackend();
-        DashboardSettings traySettings = new DashboardSettings { codex = new CodexSettings { enabled = true } };
+        DashboardSettings traySettings = new DashboardSettings
+        {
+            codex = new CodexSettings { enabled = false },
+            minimax = new MiniMaxSettings { enabled = false },
+            deepseek = new DeepSeekSettings { enabled = false },
+            trayIconMode = "percentage"
+        };
+        int traySettingsSaveCount = 0;
         PopupWindow trayPopup = new PopupWindow(traySettings);
         trayPopup.Show();
         WaitForDispatcher(50);
+        DashboardState.CodexQuota = fiveHour72;
+        Expect(traySettings.trayIconMode == "percentage"
+            && DashboardState.CodexQuota.FiveHourAvailable
+            && DashboardState.CodexQuota.FiveHourRemainingPercent == 72,
+            "tray integration precondition retains percentage mode and 72 percent quota");
         int showCountBefore = trayFake.ShowCount;
         int setIconCountBefore = trayFake.SetIconCount;
-        TrayController trayController = new TrayController(traySettings, trayFake, trayPopup);
+        TrayController trayController = new TrayController(
+            traySettings, trayFake, trayPopup, delegate(DashboardSettings saved) { traySettingsSaveCount++; });
         WaitForDispatcher(20);
         Expect(trayFake.ShowCount == showCountBefore + 1, "TrayController construction calls backend.Show exactly once");
         Expect(trayFake.SetIconCount == setIconCountBefore + 1, "TrayController construction calls backend.SetIcon exactly once");
         Expect(trayController.Popup == trayPopup, "TrayController exposes the Popup instance it was constructed with");
+        Expect(DashboardStateChangedTargets(trayController),
+            "TrayController subscribes to DashboardState.Changed");
+        System.Reflection.FieldInfo currentVisualField = typeof(TrayController).GetField(
+            "_currentVisual", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        TrayIconVisual constructedVisual = currentVisualField == null
+            ? null
+            : currentVisualField.GetValue(trayController) as TrayIconVisual;
+        Expect(constructedVisual != null && constructedVisual.Kind == TrayIconVisualKind.Percentage
+            && constructedVisual.Percentage == 72,
+            "TrayController construction derives the configured initial percentage visual");
+        System.Drawing.Icon initialBorrowedIcon = trayFake.CurrentIcon;
+        DashboardState.CodexQuota = new QuotaSnapshot(true, true, 72, 12, "same displayed 5h", null, null);
+        trayController.RefreshIcon();
+        Expect(trayFake.SetIconCount == setIconCountBefore + 1,
+            "same derived tray visual does not replace the backend icon");
+        Expect(object.ReferenceEquals(initialBorrowedIcon, trayFake.CurrentIcon),
+            "same derived tray visual reuses the currently borrowed icon");
+
+        DashboardState.CodexQuota = new QuotaSnapshot(true, true, 71, 12, "changed 5h", null, null);
+        RaiseDashboardStateChangedFor(trayController);
+        Expect(trayFake.SetIconCount == setIconCountBefore + 2,
+            "displayed percentage change replaces the backend icon");
+        System.Drawing.Icon percentage71Icon = trayFake.CurrentIcon;
+
+        DashboardState.CodexQuota = new QuotaSnapshot(false, true, 71, 99, "weekly only", null, null);
+        trayController.RefreshIcon();
+        Expect(trayFake.SetIconCount == setIconCountBefore + 3,
+            "loss of Codex 5-hour availability replaces percentage with default fallback");
+        DashboardState.CodexQuota = new QuotaSnapshot(false, true, 10, 40, "still weekly only", null, null);
+        trayController.RefreshIcon();
+        Expect(trayFake.SetIconCount == setIconCountBefore + 3,
+            "weekly-only changes do not replace an unchanged default fallback");
+
+        System.Windows.Forms.MenuItem defaultModeItem = FindMenuItem(trayFake.ContextMenu, "默认图标");
+        System.Windows.Forms.MenuItem percentageModeItem = FindMenuItem(trayFake.ContextMenu, "Codex 5 小时百分比");
+        Expect(defaultModeItem != null && percentageModeItem != null,
+            "tray menu exposes both required icon mode choices");
+        RaiseContextMenuPopup(trayFake.ContextMenu);
+        Expect(percentageModeItem != null && percentageModeItem.Checked
+            && defaultModeItem != null && !defaultModeItem.Checked,
+            "tray menu checks the current normalized percentage mode when opened");
+        if (defaultModeItem != null) defaultModeItem.PerformClick();
+        Expect(traySettings.trayIconMode == "default" && traySettingsSaveCount == 1,
+            "selecting default tray mode updates and persists settings");
+        Expect(trayFake.SetIconCount == setIconCountBefore + 3,
+            "selecting default while fallback is already visible avoids redundant replacement");
+        RaiseContextMenuPopup(trayFake.ContextMenu);
+        Expect(defaultModeItem != null && defaultModeItem.Checked
+            && percentageModeItem != null && !percentageModeItem.Checked,
+            "tray menu refreshes mutually exclusive checks after mode selection");
+        if (percentageModeItem != null) percentageModeItem.PerformClick();
+        Expect(traySettings.trayIconMode == "percentage" && traySettingsSaveCount == 2,
+            "selecting percentage mode keeps and persists the setting while 5-hour data is unavailable");
+        DashboardState.CodexQuota = new QuotaSnapshot(true, true, 71, 40, "5h restored", null, null);
+        trayController.RefreshIcon();
+        Expect(trayFake.SetIconCount == setIconCountBefore + 4
+            && object.ReferenceEquals(percentage71Icon, trayFake.CurrentIcon),
+            "restored 5-hour data automatically switches to the cached percentage icon");
+
+        int gdiBeforeVariantLoop = CurrentGdiResourceCount();
+        int replacementsBeforeVariantLoop = trayFake.SetIconCount;
+        for (int percentage = 0; percentage <= 100; percentage++)
+        {
+            DashboardState.CodexQuota = new QuotaSnapshot(
+                true, true, percentage, 40, "diagnostic first pass", null, null);
+            trayController.RefreshIcon();
+        }
+        int gdiAfterFirstVariantLoop = CurrentGdiResourceCount();
+        int replacementsAfterFirstVariantLoop = trayFake.SetIconCount;
+        for (int percentage = 0; percentage <= 100; percentage++)
+        {
+            DashboardState.CodexQuota = new QuotaSnapshot(
+                true, true, percentage, 40, "diagnostic cached pass", null, null);
+            trayController.RefreshIcon();
+        }
+        int gdiAfterCachedVariantLoop = CurrentGdiResourceCount();
+        Expect(replacementsAfterFirstVariantLoop == replacementsBeforeVariantLoop + 101
+            && trayFake.SetIconCount == replacementsAfterFirstVariantLoop + 101,
+            "changing-state diagnostic performs one replacement per displayed percentage transition");
+        Expect(gdiBeforeVariantLoop > 0 && gdiAfterFirstVariantLoop >= gdiBeforeVariantLoop
+            && gdiAfterCachedVariantLoop <= gdiAfterFirstVariantLoop + 2,
+            "cached percentage pass does not cause unbounded GDI resource growth");
 
         System.Reflection.FieldInfo dismissField = typeof(TrayController).GetField(
             "_dismissTimer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
@@ -390,7 +601,29 @@ static class ProgramTests
         Expect(!TrayController.IsWithinTrayAnchorForTest(
             new System.Drawing.Point(1660, 80), trayAnchor, 32),
             "cursor movement away from the observed tray icon leaves its anchor");
+        System.Drawing.Icon lastBorrowedIcon = trayFake.CurrentIcon;
+        int replacementsBeforeDispose = trayFake.SetIconCount;
         trayController.Dispose();
+        trayController.Dispose();
+        Expect(trayFake.DisposeCount == 1, "TrayController disposal is idempotent for the backend");
+        Expect(trayFake.IconHandleWasValidAtDispose,
+            "backend is disposed while its borrowed icon is still valid");
+        Expect(IsDisposedIcon(lastBorrowedIcon),
+            "controller disposes its cached icon resources after backend release");
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        int gdiAfterControllerDispose = CurrentGdiResourceCount();
+        Expect(gdiAfterControllerDispose <= gdiBeforeVariantLoop + 2,
+            "controller disposal releases cached percentage icon GDI resources back to baseline");
+        Console.WriteLine("Tray icon diagnostic: replacements="
+            + replacementsBeforeVariantLoop + "->" + replacementsAfterFirstVariantLoop + "->"
+            + trayFake.SetIconCount + ", GDI=" + gdiBeforeVariantLoop + "->"
+            + gdiAfterFirstVariantLoop + "->" + gdiAfterCachedVariantLoop + "->"
+            + gdiAfterControllerDispose);
+        Expect(!DashboardStateChangedTargets(trayController),
+            "disposed controller unsubscribes from dashboard state changes");
+        Expect(trayFake.SetIconCount == replacementsBeforeDispose,
+            "disposing the controller does not replace the backend icon");
 
         if (failures != 0) Environment.Exit(1);
         Console.WriteLine("Provider self-tests passed");
@@ -403,12 +636,19 @@ class FakeBackend : INotifyIconBackend
     public event EventHandler MouseLeave;
     public event EventHandler Click;
     public event EventHandler RightClick;
-    public int ShowCount, HideCount, SetIconCount;
+    public int ShowCount, HideCount, SetIconCount, DisposeCount;
+    public bool IconHandleWasValidAtDispose;
+    public System.Drawing.Icon CurrentIcon;
+    public System.Windows.Forms.ContextMenu ContextMenu;
     public void Show() { ShowCount++; }
     public void Hide() { HideCount++; }
-    public void SetIcon(System.Drawing.Icon icon) { SetIconCount++; }
-    public void SetContextMenu(System.Windows.Forms.ContextMenu menu) { }
-    public void Dispose() { }
+    public void SetIcon(System.Drawing.Icon icon) { SetIconCount++; CurrentIcon = icon; }
+    public void SetContextMenu(System.Windows.Forms.ContextMenu menu) { ContextMenu = menu; }
+    public void Dispose()
+    {
+        DisposeCount++;
+        IconHandleWasValidAtDispose = CurrentIcon != null && CurrentIcon.Handle != IntPtr.Zero;
+    }
     public void RaiseMouseMove() { var h = MouseMove; if (h != null) h(this, null); }
     public void RaiseMouseLeave() { var h = MouseLeave; if (h != null) h(this, EventArgs.Empty); }
     public void RaiseClick() { var h = Click; if (h != null) h(this, EventArgs.Empty); }

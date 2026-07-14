@@ -251,6 +251,40 @@ class DeepSeekSettings
 class CodexSettings { public bool enabled = true; }
 class GlassSettings { public int cornerRadius = 15; }
 enum TrayIconMode { Default, Percentage }
+enum TrayIconVisualKind { Default, Percentage }
+
+sealed class TrayIconVisual : IEquatable<TrayIconVisual>
+{
+    public readonly TrayIconVisualKind Kind;
+    public readonly int Percentage;
+
+    public TrayIconVisual(TrayIconVisualKind kind, int percentage)
+    {
+        Kind = kind;
+        Percentage = Math.Max(0, Math.Min(100, percentage));
+    }
+
+    public bool Equals(TrayIconVisual other)
+    {
+        return !object.ReferenceEquals(other, null)
+            && Kind == other.Kind
+            && Percentage == other.Percentage;
+    }
+
+    public override bool Equals(object obj) { return Equals(obj as TrayIconVisual); }
+    public override int GetHashCode() { return ((int)Kind * 397) ^ Percentage; }
+}
+
+static class TrayIconState
+{
+    public static TrayIconVisual Select(TrayIconMode mode, QuotaSnapshot quota)
+    {
+        if (mode == TrayIconMode.Percentage && quota != null && quota.FiveHourAvailable)
+            return new TrayIconVisual(TrayIconVisualKind.Percentage, quota.FiveHourRemainingPercent);
+        return new TrayIconVisual(TrayIconVisualKind.Default, 0);
+    }
+}
+
 class ActiveSettings
 {
     public int refreshSeconds;
@@ -1556,32 +1590,123 @@ class TrayIconBackend : INotifyIconBackend
 
 static class BitmapFactory
 {
-    public static System.Drawing.Icon CreateTrayIcon(System.Drawing.Color healthyDot, System.Drawing.Color errorDot)
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool DestroyIcon(IntPtr handle);
+
+    public static System.Drawing.Icon CreateTrayIcon(TrayIconVisual visual, int size)
     {
-        using (System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(16, 16))
+        if (visual == null) throw new ArgumentNullException("visual");
+        if (size <= 0) throw new ArgumentOutOfRangeException("size");
+
+        using (System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(size, size))
         using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(bmp))
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             g.Clear(System.Drawing.Color.Transparent);
+            DrawOpenGauge(g, visual, size);
 
-            DrawDot(g, 4, 8, healthyDot);
-            DrawDot(g, 12, 8, errorDot);
-
-            IntPtr hicon = bmp.GetHicon();
-            return (System.Drawing.Icon)System.Drawing.Icon.FromHandle(hicon).Clone();
+            IntPtr nativeHandle = bmp.GetHicon();
+            try
+            {
+                return (System.Drawing.Icon)System.Drawing.Icon.FromHandle(nativeHandle).Clone();
+            }
+            finally
+            {
+                if (nativeHandle != IntPtr.Zero) DestroyIcon(nativeHandle);
+            }
         }
     }
 
-    static void DrawDot(System.Drawing.Graphics g, int cx, int cy, System.Drawing.Color color)
+    static void DrawOpenGauge(System.Drawing.Graphics g, TrayIconVisual visual, int size)
     {
-        using (System.Drawing.SolidBrush brush = new System.Drawing.SolidBrush(color))
+        float scale = size / 16f;
+        float inset = Math.Max(1.5f, 2.0f * scale);
+        float stroke = Math.Max(1.25f, 1.55f * scale);
+        System.Drawing.RectangleF ring = new System.Drawing.RectangleF(
+            inset, inset, size - inset * 2f, size - inset * 2f);
+        using (System.Drawing.Pen shadow = new System.Drawing.Pen(
+            System.Drawing.Color.FromArgb(150, 43, 50, 61), stroke + Math.Max(0.7f, 0.75f * scale)))
+        using (System.Drawing.Pen foreground = new System.Drawing.Pen(
+            System.Drawing.Color.FromArgb(245, 221, 226, 234), stroke))
         {
-            g.FillEllipse(brush, cx - 3, cy - 3, 6, 6);
+            shadow.StartCap = shadow.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+            foreground.StartCap = foreground.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+            g.DrawArc(shadow, ring, 135f, 270f);
+            g.DrawArc(foreground, ring, 135f, 270f);
         }
-        using (System.Drawing.Pen pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(160, 168, 184), 1))
+
+        if (visual.Kind == TrayIconVisualKind.Percentage)
         {
-            g.DrawEllipse(pen, cx - 4, cy - 4, 8, 8);
+            DrawPercentage(g, visual.Percentage, size);
+            return;
         }
+
+        using (System.Drawing.SolidBrush indicator = new System.Drawing.SolidBrush(
+            System.Drawing.Color.FromArgb(245, 221, 226, 234)))
+        using (System.Drawing.Pen indicatorShadow = new System.Drawing.Pen(
+            System.Drawing.Color.FromArgb(150, 43, 50, 61), Math.Max(0.8f, scale)))
+        {
+            float cx = size / 2f;
+            float cy = size / 2f;
+            float radius = Math.Max(1.2f, 1.35f * scale);
+            g.DrawLine(indicatorShadow, cx, cy + radius * 1.8f, cx + radius * 1.7f, cy - radius * 0.8f);
+            g.FillEllipse(indicator, cx - radius, cy - radius, radius * 2f, radius * 2f);
+        }
+    }
+
+    static void DrawPercentage(System.Drawing.Graphics g, int percentage, int size)
+    {
+        string text = percentage.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        bool exactHundred = percentage == 100;
+        float fontSize = size * (exactHundred ? 0.305f : (percentage >= 10 ? 0.39f : 0.46f));
+        System.Drawing.RectangleF layout = exactHundred
+            ? new System.Drawing.RectangleF(0f, size * 0.30f, size, size * 0.43f)
+            : new System.Drawing.RectangleF(0f, size * 0.27f, size, size * 0.48f);
+        using (System.Drawing.Font font = new System.Drawing.Font(
+            System.Drawing.FontFamily.GenericSansSerif, fontSize, System.Drawing.FontStyle.Bold,
+            System.Drawing.GraphicsUnit.Pixel))
+        using (System.Drawing.StringFormat format = new System.Drawing.StringFormat())
+        using (System.Drawing.SolidBrush shadow = new System.Drawing.SolidBrush(
+            System.Drawing.Color.FromArgb(180, 43, 50, 61)))
+        using (System.Drawing.SolidBrush foreground = new System.Drawing.SolidBrush(
+            System.Drawing.Color.FromArgb(255, 229, 233, 239)))
+        {
+            format.Alignment = System.Drawing.StringAlignment.Center;
+            format.LineAlignment = System.Drawing.StringAlignment.Center;
+            format.FormatFlags = System.Drawing.StringFormatFlags.NoWrap;
+            System.Drawing.RectangleF shadowLayout = layout;
+            shadowLayout.Offset(0f, Math.Max(0.6f, size / 32f));
+            g.DrawString(text, font, shadow, shadowLayout, format);
+            g.DrawString(text, font, foreground, layout, format);
+        }
+    }
+}
+
+sealed class TrayIconCache : IDisposable
+{
+    readonly Dictionary<string, System.Drawing.Icon> _icons = new Dictionary<string, System.Drawing.Icon>();
+    bool _disposed;
+
+    public System.Drawing.Icon Get(TrayIconVisual visual, int size)
+    {
+        if (_disposed) throw new ObjectDisposedException("TrayIconCache");
+        string key = ((int)visual.Kind).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + ":" + visual.Percentage.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + ":" + size.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        System.Drawing.Icon icon;
+        if (_icons.TryGetValue(key, out icon)) return icon;
+        icon = BitmapFactory.CreateTrayIcon(visual, size);
+        _icons.Add(key, icon);
+        return icon;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        foreach (System.Drawing.Icon icon in _icons.Values) icon.Dispose();
+        _icons.Clear();
     }
 }
 
@@ -1618,6 +1743,12 @@ class TrayController : IDisposable
     readonly DispatcherTimer _hoverTimer;
     readonly DispatcherTimer _dismissTimer;
     readonly DispatcherTimer _cursorPollTimer;
+    readonly TrayIconCache _iconCache;
+    readonly Action<DashboardSettings> _saveSettings;
+    System.Windows.Forms.ContextMenu _contextMenu;
+    TrayIconVisual _currentVisual;
+    bool _hasCurrentVisual;
+    bool _disposed;
     bool _cursorOverTray;
     bool _hasTrayAnchor;
     System.Drawing.Point _lastTrayPoint;
@@ -1625,10 +1756,21 @@ class TrayController : IDisposable
     public PopupWindow Popup { get { return _popup; } }
 
     public TrayController(DashboardSettings settings, INotifyIconBackend backend, PopupWindow popup)
+        : this(settings, backend, popup, delegate(DashboardSettings value) { value.Save(); })
+    {
+    }
+
+    public TrayController(
+        DashboardSettings settings,
+        INotifyIconBackend backend,
+        PopupWindow popup,
+        Action<DashboardSettings> saveSettings)
     {
         _settings = settings;
         _backend = backend;
         _popup = popup;
+        _saveSettings = saveSettings ?? delegate { };
+        _iconCache = new TrayIconCache();
         _cursorOverTray = false;
 
         _hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(settings.popupHoverDelayMs) };
@@ -1655,12 +1797,11 @@ class TrayController : IDisposable
         _backend.MouseMove += delegate { OnTrayMouseMove(); };
         _popup.MouseEnter += delegate { _dismissTimer.Stop(); };
         _popup.MouseLeave += delegate { if (!_popup.IsSticky) _dismissTimer.Start(); };
+        DashboardState.Changed += OnDashboardStateChanged;
 
         try
         {
-            _backend.SetIcon(BitmapFactory.CreateTrayIcon(
-                System.Drawing.ColorTranslator.FromHtml("#74DE80"),
-                System.Drawing.ColorTranslator.FromHtml("#EC5353")));
+            RefreshIcon();
             _backend.Show();
         }
         catch { /* fallback: handled in Task 9 if tray unavailable */ }
@@ -1676,7 +1817,17 @@ class TrayController : IDisposable
             }
             pinItem.Checked = _popup.IsSticky;
         };
-        menu.Popup += delegate { pinItem.Checked = _popup.IsSticky; };
+        System.Windows.Forms.MenuItem defaultIconItem = new System.Windows.Forms.MenuItem("默认图标");
+        System.Windows.Forms.MenuItem percentageIconItem = new System.Windows.Forms.MenuItem("Codex 5 小时百分比");
+        defaultIconItem.Click += delegate { SelectTrayIconMode(TrayIconMode.Default); };
+        percentageIconItem.Click += delegate { SelectTrayIconMode(TrayIconMode.Percentage); };
+        menu.Popup += delegate
+        {
+            pinItem.Checked = _popup.IsSticky;
+            TrayIconMode mode = DashboardSettings.NormalizeTrayIconMode(_settings.trayIconMode);
+            defaultIconItem.Checked = mode == TrayIconMode.Default;
+            percentageIconItem.Checked = mode == TrayIconMode.Percentage;
+        };
 
         System.Windows.Forms.MenuItem settingsItem = new System.Windows.Forms.MenuItem("设置…");
         settingsItem.Click += delegate
@@ -1689,15 +1840,39 @@ class TrayController : IDisposable
         exitItem.Click += delegate { System.Windows.Application.Current.Shutdown(); };
 
         menu.MenuItems.Add(pinItem);
+        menu.MenuItems.Add(defaultIconItem);
+        menu.MenuItems.Add(percentageIconItem);
         menu.MenuItems.Add(settingsItem);
         menu.MenuItems.Add(new System.Windows.Forms.MenuItem("-"));
         menu.MenuItems.Add(exitItem);
 
-        TrayIconBackend tib = backend as TrayIconBackend;
-        System.Windows.Forms.NotifyIcon ni = tib == null ? null : tib._icon;
-        if (ni != null) ni.ContextMenu = menu;
+        _contextMenu = menu;
+        _backend.SetContextMenu(menu);
 
         _backend.Click += delegate { ShowPopup(); };
+    }
+
+    void OnDashboardStateChanged()
+    {
+        if (!_disposed) RefreshIcon();
+    }
+
+    void SelectTrayIconMode(TrayIconMode mode)
+    {
+        _settings.trayIconMode = mode == TrayIconMode.Percentage ? "percentage" : "default";
+        RefreshIcon();
+        try { _saveSettings(_settings); } catch { }
+    }
+
+    internal void RefreshIcon()
+    {
+        TrayIconVisual next = TrayIconState.Select(
+            DashboardSettings.NormalizeTrayIconMode(_settings.trayIconMode), DashboardState.CodexQuota);
+        if (_hasCurrentVisual && _currentVisual.Equals(next)) return;
+        System.Drawing.Icon icon = _iconCache.Get(next, 16);
+        _backend.SetIcon(icon);
+        _currentVisual = next;
+        _hasCurrentVisual = true;
     }
 
     void OnTrayMouseMove()
@@ -1897,11 +2072,16 @@ class TrayController : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+        DashboardState.Changed -= OnDashboardStateChanged;
         _cursorPollTimer.Stop();
         _hoverTimer.Stop();
         _dismissTimer.Stop();
         _popup.Close();
         _backend.Dispose();
+        if (_contextMenu != null) _contextMenu.Dispose();
+        _iconCache.Dispose();
     }
 
 }
