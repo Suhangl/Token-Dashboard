@@ -235,15 +235,20 @@ static class ProgramTests
         Expect(popupBack.popupStickyOnLaunch, "popupStickyOnLaunch round-trip");
         Expect(popupBack.popupDismissDelayMs == 250 && popupBack.popupHoverDelayMs == 350, "popup timings round-trip");
 
-        // --- BuildUiFactory builds without throwing for any provider mix ---
+        // --- BuildUiFactory exact layout contract for every provider mix ---
         DashboardSettings[] configs = new DashboardSettings[]
         {
+            new DashboardSettings { codex = new CodexSettings { enabled = false }, minimax = new MiniMaxSettings { enabled = false }, deepseek = new DeepSeekSettings { enabled = false } },
             new DashboardSettings { codex = new CodexSettings { enabled = true }, minimax = new MiniMaxSettings { enabled = false }, deepseek = new DeepSeekSettings { enabled = false } },
             new DashboardSettings { codex = new CodexSettings { enabled = false }, minimax = new MiniMaxSettings { enabled = true }, deepseek = new DeepSeekSettings { enabled = false } },
             new DashboardSettings { codex = new CodexSettings { enabled = false }, minimax = new MiniMaxSettings { enabled = false }, deepseek = new DeepSeekSettings { enabled = true } },
+            new DashboardSettings { codex = new CodexSettings { enabled = true }, minimax = new MiniMaxSettings { enabled = true }, deepseek = new DeepSeekSettings { enabled = false } },
+            new DashboardSettings { codex = new CodexSettings { enabled = true }, minimax = new MiniMaxSettings { enabled = false }, deepseek = new DeepSeekSettings { enabled = true } },
+            new DashboardSettings { codex = new CodexSettings { enabled = false }, minimax = new MiniMaxSettings { enabled = true }, deepseek = new DeepSeekSettings { enabled = true } },
             new DashboardSettings { codex = new CodexSettings { enabled = true }, minimax = new MiniMaxSettings { enabled = true }, deepseek = new DeepSeekSettings { enabled = true } }
         };
-        string[] names = new string[] { "codex only", "minimax only", "deepseek only", "all three" };
+        string[] names = new string[] { "none", "codex only", "minimax only", "deepseek only", "codex + minimax", "codex + deepseek", "minimax + deepseek", "all three" };
+        double[] expectedHeights = new double[] { 92, 167, 171, 158, 252, 239, 243, 324 };
         for (int i = 0; i < configs.Length; i++)
         {
             try
@@ -253,13 +258,49 @@ static class ProgramTests
                 Expect(result.Bindings != null, "BuildUiFactory " + names[i] + " returns non-null bindings");
                 Expect(result.Bindings.stickyPinButton != null, "BuildUiFactory " + names[i] + " populates stickyPinButton");
                 System.Windows.Controls.Border quietShell = result.Root as System.Windows.Controls.Border;
-                Expect(quietShell != null && quietShell.Margin.Left >= 6 && quietShell.Margin.Top >= 6,
-                    "Quiet Glass shell reserves an outer shadow gutter");
+                Expect(quietShell != null && quietShell.Margin.Left == 8 && quietShell.Margin.Top == 8
+                    && quietShell.Margin.Right == 8 && quietShell.Margin.Bottom == 8,
+                    "Quiet Glass shell reserves an 8px outer shadow gutter on all sides");
+                Expect(quietShell != null && quietShell.Effect is System.Windows.Media.Effects.DropShadowEffect,
+                    "Quiet Glass shell has a drop shadow effect");
+                System.Windows.Controls.Grid layoutGrid = quietShell == null ? null : quietShell.Child as System.Windows.Controls.Grid;
+                double rowHeight = 0;
+                if (layoutGrid != null) foreach (System.Windows.Controls.RowDefinition definition in layoutGrid.RowDefinitions) rowHeight += definition.Height.Value;
+                double actualLayoutHeight = quietShell == null || layoutGrid == null ? -1
+                    : quietShell.Margin.Top + quietShell.Margin.Bottom + quietShell.BorderThickness.Top + quietShell.BorderThickness.Bottom
+                        + layoutGrid.Margin.Top + layoutGrid.Margin.Bottom + rowHeight;
+                Expect(Math.Abs(PopupWindow.DesiredHeight(configs[i]) - expectedHeights[i]) < 0.01,
+                    "DesiredHeight is exact for " + names[i]);
+                Expect(Math.Abs(actualLayoutHeight - expectedHeights[i]) < 0.01,
+                    "built row layout matches DesiredHeight for " + names[i]);
                 if (configs[i].codex.enabled)
+                {
                     Expect(result.Bindings.codexTokenUsage != null, "Codex section exposes its token usage binding");
+                    System.Windows.Controls.Grid codexFiveTrackRow = result.Bindings.fiveTrack.Parent as System.Windows.Controls.Grid;
+                    System.Windows.Controls.Grid codexComposite = codexFiveTrackRow == null ? null : codexFiveTrackRow.Parent as System.Windows.Controls.Grid;
+                    double codexCompositeHeight = 0;
+                    if (codexComposite != null) foreach (System.Windows.Controls.RowDefinition definition in codexComposite.RowDefinitions) codexCompositeHeight += definition.Height.Value;
+                    Expect(codexComposite != null && codexComposite.RowDefinitions.Count == 5 && Math.Abs(codexCompositeHeight - 55) < 0.01,
+                        "Codex composite has five readable rows totaling 55px");
+                    Expect(codexComposite != null && result.Bindings.fiveTrack.Height <= codexComposite.RowDefinitions[1].Height.Value
+                        && result.Bindings.weekTrack.Height <= codexComposite.RowDefinitions[2].Height.Value,
+                        "Codex tracks do not overlap adjacent composite rows");
+                }
                 if (configs[i].minimax.enabled)
-                    Expect(result.Bindings.miniFiveTrack != null && result.Bindings.miniWeekTrack != null,
-                        "MiniMax retains both 5H and W tracks");
+                {
+                    Expect(result.Bindings.miniFiveTrack != null && result.Bindings.miniWeekTrack != null
+                        && result.Bindings.miniFivePercent != null && result.Bindings.miniWeekPercent != null,
+                        "MiniMax retains both 5H and W tracks and percentages");
+                    System.Windows.Controls.Grid miniFiveTrackRow = result.Bindings.miniFiveTrack.Parent as System.Windows.Controls.Grid;
+                    System.Windows.Controls.Grid miniComposite = miniFiveTrackRow == null ? null : miniFiveTrackRow.Parent as System.Windows.Controls.Grid;
+                    double miniCompositeHeight = 0;
+                    if (miniComposite != null) foreach (System.Windows.Controls.RowDefinition definition in miniComposite.RowDefinitions) miniCompositeHeight += definition.Height.Value;
+                    Expect(miniComposite != null && miniComposite.RowDefinitions.Count == 4 && Math.Abs(miniCompositeHeight - 55) < 0.01,
+                        "MiniMax composite has four readable rows totaling 55px");
+                    Expect(miniComposite != null && result.Bindings.miniFiveTrack.Height <= miniComposite.RowDefinitions[1].Height.Value
+                        && result.Bindings.miniWeekTrack.Height <= miniComposite.RowDefinitions[2].Height.Value,
+                        "MiniMax tracks do not overlap adjacent composite rows");
+                }
             }
             catch (Exception ex)
             {

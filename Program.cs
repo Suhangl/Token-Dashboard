@@ -914,11 +914,11 @@ static class BuildUiFactory
         block.ColumnDefinitions.Add(new ColumnDefinition());
         block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
         block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 18 : 20) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 7 : 8) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 3 : 4) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 14 : 18) });
-        if (isCodex) block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(13) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 18 : 22) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 14 : 21) });
+        if (isCodex) block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(11) });
 
         TextBlock fivePct = MakeText("--", 14, 0, QuietGlassPalette.PrimaryText.R, QuietGlassPalette.PrimaryText.G, QuietGlassPalette.PrimaryText.B, FontWeights.SemiBold); fivePct.HorizontalAlignment = HorizontalAlignment.Right;
         TextBlock fiveUsed = MakeText("", 10, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal); fiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
@@ -960,7 +960,7 @@ static class BuildUiFactory
 
         if (isCodex)
         {
-            b.codexTokenUsage = MakeText("", 9.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal);
+            b.codexTokenUsage = MakeText("", 9, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal);
             b.codexTokenUsage.HorizontalAlignment = HorizontalAlignment.Right;
             Grid.SetRow(b.codexTokenUsage, 4); Grid.SetColumnSpan(b.codexTokenUsage, 4);
             block.Children.Add(b.codexTokenUsage);
@@ -1412,7 +1412,7 @@ class PopupWindow : Window
     {
         double h = 62;
         if (s.codex != null && s.codex.enabled) h += 17 + 3 + 55;
-        if (s.minimax != null && s.minimax.enabled) h += 10 + 17 + 3 + 55;
+        if (s.minimax != null && s.minimax.enabled) h += ((s.codex != null && s.codex.enabled) ? 10 : 4) + 17 + 3 + 55;
         if (s.deepseek != null && s.deepseek.enabled) h += ((s.codex != null && s.codex.enabled || s.minimax != null && s.minimax.enabled) ? 10 : 4) + 17 + 3 + 42;
         return h + 30;
     }
