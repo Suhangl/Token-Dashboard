@@ -215,6 +215,10 @@ static class ProgramTests
             "elapsed reset clamps t-minus to zero");
         Expect(PresentationText.MiniMaxTMinus("2h 34m") == "\u221202:34",
             "MiniMax remaining time converts to compact t-minus copy");
+        Expect(PresentationText.MiniMaxTMinus("30s") == "\u221200:00",
+            "MiniMax seconds-only remaining time truncates to zero minutes");
+        Expect(PresentationText.MiniMaxTMinus("45m 30s") == "\u221200:45",
+            "MiniMax seconds do not round the compact minute value");
         Expect(PresentationText.MiniMaxTMinus("") == "", "unknown MiniMax remaining time is omitted");
 
         // --- Settings round-trip preserves popupLeft/Top + sticky + timings (Task 3) ---

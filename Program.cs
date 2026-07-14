@@ -163,14 +163,22 @@ static class PresentationText
     {
         if (string.IsNullOrWhiteSpace(remainingText)) return "";
         string text = remainingText.Trim().ToLowerInvariant();
-        int hours = 0, minutes = 0;
+        int hours = 0, minutes = 0, seconds = 0;
         int hourMarker = text.IndexOf('h');
         int minuteMarker = text.IndexOf('m');
+        int secondMarker = text.IndexOf('s');
+        if (hourMarker != text.LastIndexOf('h') || minuteMarker != text.LastIndexOf('m') || secondMarker != text.LastIndexOf('s')) return "";
+        if ((minuteMarker >= 0 && hourMarker > minuteMarker)
+            || (secondMarker >= 0 && hourMarker > secondMarker)
+            || (secondMarker >= 0 && minuteMarker > secondMarker)) return "";
         if (hourMarker >= 0 && !int.TryParse(text.Substring(0, hourMarker).Trim(), out hours)) return "";
         int minuteStart = hourMarker >= 0 ? hourMarker + 1 : 0;
         if (minuteMarker >= minuteStart && !int.TryParse(text.Substring(minuteStart, minuteMarker - minuteStart).Trim(), out minutes)) return "";
-        if (hourMarker < 0 && minuteMarker < 0) return "";
-        if (hours < 0 || minutes < 0) return "";
+        int secondStart = minuteMarker >= 0 ? minuteMarker + 1 : hourMarker >= 0 ? hourMarker + 1 : 0;
+        if (secondMarker >= secondStart && !int.TryParse(text.Substring(secondStart, secondMarker - secondStart).Trim(), out seconds)) return "";
+        int lastMarker = Math.Max(hourMarker, Math.Max(minuteMarker, secondMarker));
+        if (lastMarker < 0 || lastMarker != text.Length - 1) return "";
+        if (hours < 0 || minutes < 0 || seconds < 0 || seconds >= 60) return "";
         hours += minutes / 60;
         minutes %= 60;
         return "\u2212" + hours.ToString("00") + ":" + minutes.ToString("00");
