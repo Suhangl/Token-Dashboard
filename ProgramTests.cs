@@ -69,14 +69,103 @@ static class ProgramTests
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"id\": 2}") == 2, "JSON-RPC id: 2 (spaces)");
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"result\":{},\"id\":2}") == 2, "JSON-RPC id after result");
 
-        // --- Codex quota Parse: newer API responses only carry the weekly window ---
+        // --- Codex quota Parse: each rate-limit window has independent availability ---
         QuotaSnapshot weeklyOnly = CodexAppServerQuota.ParseForTest("{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":0,\"windowDurationMins\":10080,\"resetsAt\":1784557641},\"secondary\":null,\"credits\":{\"hasCredits\":false,\"unlimited\":false,\"balance\":\"0\"},\"planType\":\"plus\"}}}");
         Expect(weeklyOnly != null, "Codex Parse handles weekly-only response");
-        Expect(weeklyOnly.Available, "Codex weekly-only is available");
+        Expect(weeklyOnly.Available && weeklyOnly.WeeklyAvailable, "Codex weekly-only keeps the weekly meter available");
+        Expect(!weeklyOnly.FiveHourAvailable, "Codex weekly-only marks the missing 5h meter unavailable");
         Expect(weeklyOnly.WeeklyRemainingPercent == 100, "Codex weekly-only: week from primary 0% used");
-        Expect(weeklyOnly.FiveHourRemainingPercent == 100, "Codex weekly-only: 5h defaults to 100 when no secondary");
+        Expect(!weeklyOnly.FiveHourResetsAt.HasValue, "Codex weekly-only does not invent a 5h reset time");
+
+        QuotaSnapshot dualWindow = CodexAppServerQuota.ParseForTest("{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":25,\"windowDurationMins\":300,\"resetsAt\":1784550000},\"secondary\":{\"usedPercent\":10,\"windowDurationMins\":10080,\"resetsAt\":1785550000}}}}");
+        Expect(dualWindow != null && dualWindow.FiveHourAvailable && dualWindow.WeeklyAvailable,
+            "Codex Parse exposes both standard windows when the backend returns them");
+        Expect(dualWindow.FiveHourRemainingPercent == 75 && dualWindow.WeeklyRemainingPercent == 90,
+            "Codex Parse computes remaining percentages by duration rather than field order");
+        Expect(dualWindow.FiveHourResetsAt.HasValue && dualWindow.WeeklyResetsAt.HasValue,
+            "Codex Parse preserves both backend reset times");
+
+        QuotaSnapshot byLimitId = CodexAppServerQuota.ParseForTest("{\"id\":2,\"result\":{\"rateLimitsByLimitId\":{\"codex\":{\"primary\":{\"usedPercent\":40,\"windowDurationMins\":300,\"resetsAt\":1784550000},\"secondary\":{\"usedPercent\":20,\"windowDurationMins\":10080,\"resetsAt\":1785550000}}},\"rateLimits\":{\"primary\":{\"usedPercent\":99,\"windowDurationMins\":10080}}}}");
+        Expect(byLimitId != null && byLimitId.FiveHourRemainingPercent == 60 && byLimitId.WeeklyRemainingPercent == 80,
+            "Codex Parse prioritizes the codex rateLimitsByLimitId bucket over the legacy fallback");
+
+        Expect(PopupWindow.MeterFillWidthForTest(false, 50, 300) == 300,
+            "unavailable meter uses a full-width indicator");
+        Expect(PopupWindow.MeterFillColorForTest(false, 50) == System.Windows.Media.Colors.Black,
+            "unavailable meter uses a black indicator");
         Expect(CodexAppServerQuota.ParseJsonRpcId("not json") == null, "JSON-RPC ignores non-JSON");
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"id\":1}") == 1, "JSON-RPC id:1 (not target)");
+
+        // --- Tray popup placement stays in one process-coordinate space ---
+        System.Drawing.Rectangle primaryBounds = new System.Drawing.Rectangle(0, 0, 1920, 1080);
+        Expect(TrayController.InferTrayEdgeForTest(new System.Drawing.Point(1870, 1068), primaryBounds) == TrayEdge.Bottom,
+            "tray edge inference recognizes bottom taskbar");
+        Expect(TrayController.InferTrayEdgeForTest(new System.Drawing.Point(1870, 12), primaryBounds) == TrayEdge.Top,
+            "tray edge inference recognizes top taskbar");
+
+        System.Drawing.Rectangle bottomWork = new System.Drawing.Rectangle(0, 0, 1920, 1040);
+        System.Drawing.Point bottomOrigin = TrayController.CalculatePopupOriginForTest(
+            new System.Drawing.Point(1870, 1068), primaryBounds, bottomWork, new System.Drawing.Size(340, 220));
+        Expect(bottomOrigin == new System.Drawing.Point(1522, 788),
+            "bottom tray places popup above reserved working-area edge in process coordinates");
+
+        System.Drawing.Rectangle topWork = new System.Drawing.Rectangle(0, 40, 1920, 1040);
+        System.Drawing.Point topOrigin = TrayController.CalculatePopupOriginForTest(
+            new System.Drawing.Point(1870, 12), primaryBounds, topWork, new System.Drawing.Size(340, 220));
+        Expect(topOrigin == new System.Drawing.Point(1522, 72),
+            "top tray places popup below reserved working-area edge in process coordinates");
+
+        System.Drawing.Rectangle scaledBounds = new System.Drawing.Rectangle(0, 0, 2560, 1440);
+        System.Drawing.Point scaledBottom = TrayController.CalculatePopupOriginForTest(
+            new System.Drawing.Point(2500, 1428), scaledBounds, scaledBounds, new System.Drawing.Size(510, 330));
+        Expect(scaledBottom == new System.Drawing.Point(1982, 1038),
+            "150 percent dimensions reserve 64 process-coordinate units for auto-hidden bottom taskbar");
+        System.Drawing.Point scaledTop = TrayController.CalculatePopupOriginForTest(
+            new System.Drawing.Point(2500, 12), scaledBounds, scaledBounds, new System.Drawing.Size(510, 330));
+        Expect(scaledTop == new System.Drawing.Point(1982, 72),
+            "150 percent dimensions reserve 64 process-coordinate units for auto-hidden top taskbar");
+
+        System.Drawing.Rectangle slightTopInsetWork = new System.Drawing.Rectangle(0, 1, 1920, 1079);
+        System.Drawing.Point slightTopInset = TrayController.CalculatePopupOriginForTest(
+            new System.Drawing.Point(1870, 0), primaryBounds, slightTopInsetWork, new System.Drawing.Size(340, 220));
+        Expect(slightTopInset.Y == 72,
+            "one-unit top inset still keeps the conservative 64-unit reserve");
+        System.Drawing.Rectangle slightBottomInsetWork = new System.Drawing.Rectangle(0, 0, 1920, 1078);
+        System.Drawing.Point slightBottomInset = TrayController.CalculatePopupOriginForTest(
+            new System.Drawing.Point(1870, 1079), primaryBounds, slightBottomInsetWork, new System.Drawing.Size(340, 220));
+        Expect(slightBottomInset.Y == 788,
+            "two-unit bottom inset still keeps the conservative 64-unit reserve");
+
+        System.Drawing.Rectangle leftBounds = new System.Drawing.Rectangle(-2560, 0, 2560, 1440);
+        System.Drawing.Rectangle leftWork = new System.Drawing.Rectangle(-2560, 40, 2560, 1400);
+        System.Drawing.Point negativeOrigin = TrayController.CalculatePopupOriginForTest(
+            new System.Drawing.Point(-40, 10), leftBounds, leftWork, new System.Drawing.Size(510, 330));
+        Expect(negativeOrigin == new System.Drawing.Point(-558, 72),
+            "negative-coordinate monitor keeps top popup on the cursor monitor");
+        Expect(leftWork.Contains(new System.Drawing.Rectangle(negativeOrigin, new System.Drawing.Size(510, 330))),
+            "popup rectangle remains contained by negative-coordinate working area");
+        Expect(TrayController.CalculateProbeOriginForTest(leftBounds, leftWork) == new System.Drawing.Point(-2552, 72),
+            "first positioning stage moves the HWND into the target monitor before remeasurement");
+
+        System.Windows.Rect virtualDipBounds = new System.Windows.Rect(-1280, 0, 3200, 1080);
+        Expect(TrayController.IsSavedDipPositionOnVirtualScreenForTest(-1200, 100, 360, 240, virtualDipBounds),
+            "sticky saved DIP position is accepted when visible in the WPF virtual screen");
+        Expect(!TrayController.IsSavedDipPositionOnVirtualScreenForTest(2200, 100, 360, 240, virtualDipBounds),
+            "sticky saved DIP position is rejected when outside the WPF virtual screen");
+        Expect(!TrayController.IsSavedDipPositionOnVirtualScreenForTest(double.NaN, 100, 360, 240, virtualDipBounds),
+            "sticky saved DIP position rejects NaN");
+
+        PendingPopupPosition pendingPosition = new PendingPopupPosition();
+        Expect(pendingPosition.CaptureIfEligible(true, 120, 240),
+            "sticky location change captures a pending position snapshot");
+        Expect(!pendingPosition.CaptureIfEligible(false, 900, 700),
+            "automatic hover location change is not eligible for persistence");
+        double capturedLeft, capturedTop;
+        Expect(pendingPosition.TryTake(out capturedLeft, out capturedTop)
+            && capturedLeft == 120 && capturedTop == 240,
+            "debounce consumes the captured sticky snapshot instead of a later automatic position");
+        Expect(!pendingPosition.TryTake(out capturedLeft, out capturedTop),
+            "pending sticky snapshot is consumed only once");
 
         // --- Window persistence ---
         DashboardSettings ds = new DashboardSettings();
@@ -193,6 +282,27 @@ static class ProgramTests
         Expect(trayFake.ShowCount == showCountBefore + 1, "TrayController construction calls backend.Show exactly once");
         Expect(trayFake.SetIconCount == setIconCountBefore + 1, "TrayController construction calls backend.SetIcon exactly once");
         Expect(trayController.Popup == trayPopup, "TrayController exposes the Popup instance it was constructed with");
+
+        System.Reflection.FieldInfo dismissField = typeof(TrayController).GetField(
+            "_dismissTimer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        System.Windows.Threading.DispatcherTimer dismissTimer = dismissField == null
+            ? null
+            : dismissField.GetValue(trayController) as System.Windows.Threading.DispatcherTimer;
+        Expect(dismissTimer != null, "TrayController owns a dismiss timer");
+        if (dismissTimer != null)
+        {
+            dismissTimer.Start();
+            trayFake.RaiseMouseMove();
+            Expect(!dismissTimer.IsEnabled, "NotifyIcon MouseMove cancels a pending dismiss");
+        }
+
+        System.Drawing.Point trayAnchor = new System.Drawing.Point(1600, 20);
+        Expect(TrayController.IsWithinTrayAnchorForTest(
+            new System.Drawing.Point(1606, 24), trayAnchor, 32),
+            "small cursor movement remains inside the observed tray icon anchor");
+        Expect(!TrayController.IsWithinTrayAnchorForTest(
+            new System.Drawing.Point(1660, 80), trayAnchor, 32),
+            "cursor movement away from the observed tray icon leaves its anchor");
         trayController.Dispose();
 
         if (failures != 0) Environment.Exit(1);

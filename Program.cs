@@ -85,13 +85,19 @@ class UsageSnapshot
 
 class QuotaSnapshot
 {
-    public readonly bool Available;
+    public readonly bool Available, FiveHourAvailable, WeeklyAvailable;
     public readonly int FiveHourRemainingPercent, WeeklyRemainingPercent;
     public readonly DateTime? FiveHourResetsAt, WeeklyResetsAt;
     public readonly string Status;
     public QuotaSnapshot(bool available, int five, int week, string status, DateTime? fiveReset, DateTime? weekReset)
+        : this(available, available, five, week, status, fiveReset, weekReset)
     {
-        Available = available;
+    }
+    public QuotaSnapshot(bool fiveAvailable, bool weeklyAvailable, int five, int week, string status, DateTime? fiveReset, DateTime? weekReset)
+    {
+        FiveHourAvailable = fiveAvailable;
+        WeeklyAvailable = weeklyAvailable;
+        Available = fiveAvailable || weeklyAvailable;
         FiveHourRemainingPercent = Clamp(five);
         WeeklyRemainingPercent = Clamp(week);
         Status = status;
@@ -582,11 +588,11 @@ static class CodexAppServerQuota
             p.BeginOutputReadLine(); p.BeginErrorReadLine();
             p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-dashboard\",\"version\":\"1\"},\"capabilities\":{\"experimentalApi\":true,\"requestAttestation\":false,\"optOutNotificationMethods\":[]}}}");
             p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
-            p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}");
+            p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":null}");
             p.StandardInput.Flush();
             if (!got.WaitOne(15000)) throw new Exception("quota timeout");
             QuotaSnapshot quota = Parse(response);
-            if (quota == null) throw new Exception("quota missing 5h/week values");
+            if (quota == null) throw new Exception("quota response contains no recognized rate-limit windows");
             return quota;
         }
         finally
@@ -617,21 +623,56 @@ static class CodexAppServerQuota
     static QuotaSnapshot Parse(string text)
     {
         object obj = new JavaScriptSerializer().DeserializeObject(text);
-        List<LimitWindow> windows = new List<LimitWindow>();
-        Walk(obj, windows);
+        List<LimitWindow> windows = CollectRateLimitWindows(obj);
         int? five = null, week = null; DateTime? fiveReset = null, weekReset = null;
         foreach (LimitWindow w in windows)
         {
             int remaining = Math.Max(0, Math.Min(100, (int)Math.Round(100.0 - w.UsedPercent)));
-            if (w.DurationMins == 300) { five = remaining; fiveReset = w.ResetsAt; }
-            if (w.DurationMins == 10080) { week = remaining; weekReset = w.ResetsAt; }
+            if (w.DurationMins == 300 && !five.HasValue) { five = remaining; fiveReset = w.ResetsAt; }
+            if (w.DurationMins == 10080 && !week.HasValue) { week = remaining; weekReset = w.ResetsAt; }
         }
-        // Newer Codex API responses only carry the weekly window (DurationMins=10080); the
-        // 5h window was removed. Default 5h to 100 (no separate 5h cap) so the popup shows a
-        // sensible value instead of "--" for the 5h row.
-        if (!five.HasValue) { five = 100; fiveReset = null; }
-        if (!week.HasValue) return null;
-        return new QuotaSnapshot(true, five.Value, week.Value, "codex app-server", fiveReset, weekReset);
+        if (!five.HasValue && !week.HasValue) return null;
+        return new QuotaSnapshot(
+            five.HasValue, week.HasValue,
+            five.GetValueOrDefault(), week.GetValueOrDefault(),
+            "codex app-server", fiveReset, weekReset);
+    }
+
+    static List<LimitWindow> CollectRateLimitWindows(object obj)
+    {
+        List<LimitWindow> windows = new List<LimitWindow>();
+        Dictionary<string, object> envelope = obj as Dictionary<string, object>;
+        Dictionary<string, object> result = null;
+        object resultObj;
+        if (envelope != null && envelope.TryGetValue("result", out resultObj))
+            result = resultObj as Dictionary<string, object>;
+        if (result == null) result = envelope;
+
+        bool collectedPreferred = false;
+        object byIdObj;
+        Dictionary<string, object> byId = null;
+        if (result != null && result.TryGetValue("rateLimitsByLimitId", out byIdObj))
+            byId = byIdObj as Dictionary<string, object>;
+        if (byId != null)
+        {
+            object codexBucket;
+            if (byId.TryGetValue("codex", out codexBucket))
+            {
+                Walk(codexBucket, windows);
+                collectedPreferred = windows.Count > 0;
+            }
+            if (!collectedPreferred)
+            {
+                foreach (object bucket in byId.Values) Walk(bucket, windows);
+                collectedPreferred = windows.Count > 0;
+            }
+        }
+
+        object legacyObj;
+        if (result != null && result.TryGetValue("rateLimits", out legacyObj))
+            Walk(legacyObj, windows);
+        if (windows.Count == 0) Walk(obj, windows);
+        return windows;
     }
 
     static void Walk(object obj, List<LimitWindow> windows)
@@ -885,6 +926,36 @@ static class BuildUiFactory
     }
 }
 
+class PendingPopupPosition
+{
+    bool _hasValue;
+    double _left, _top;
+
+    public bool CaptureIfEligible(bool eligible, double left, double top)
+    {
+        if (!eligible || double.IsNaN(left) || double.IsNaN(top)) return false;
+        _left = left;
+        _top = top;
+        _hasValue = true;
+        return true;
+    }
+
+    public bool TryTake(out double left, out double top)
+    {
+        if (!_hasValue)
+        {
+            left = double.NaN;
+            top = double.NaN;
+            return false;
+        }
+
+        left = _left;
+        top = _top;
+        _hasValue = false;
+        return true;
+    }
+}
+
 class PopupWindow : Window
 {
     const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
@@ -906,6 +977,7 @@ class PopupWindow : Window
     public Bindings Bindings;
     DispatcherTimer _saveDebounce;
     DispatcherTimer _countdownTick;
+    readonly PendingPopupPosition _pendingPopupPosition = new PendingPopupPosition();
     DateTime _nextRefreshAt;
     bool _isSticky;
     bool _codexBusy, _minimaxBusy, _deepseekBusy;
@@ -967,11 +1039,18 @@ class PopupWindow : Window
         _saveDebounce.Tick += delegate(object s2, EventArgs e2)
         {
             _saveDebounce.Stop();
-            Settings.popupLeft = Left;
-            Settings.popupTop = Top;
+            double pendingLeft, pendingTop;
+            if (!_pendingPopupPosition.TryTake(out pendingLeft, out pendingTop)) return;
+            Settings.popupLeft = pendingLeft;
+            Settings.popupTop = pendingTop;
             try { Settings.Save(); } catch { }
         };
-        LocationChanged += delegate { _saveDebounce.Stop(); _saveDebounce.Start(); };
+        LocationChanged += delegate
+        {
+            if (!_pendingPopupPosition.CaptureIfEligible(_isSticky, Left, Top)) return;
+            _saveDebounce.Stop();
+            _saveDebounce.Start();
+        };
 
         DashboardState.Changed += Render;
         _nextRefreshAt = DateTime.Now.AddSeconds(Settings.refreshSeconds);
@@ -1070,12 +1149,14 @@ class PopupWindow : Window
 
         if (Settings.codex.enabled)
         {
-            Bindings.fivePercent.Text = quota.Available ? quota.FiveHourRemainingPercent + "%" : "--";
-            Bindings.weekPercent.Text = quota.Available ? quota.WeeklyRemainingPercent + "%" : "--";
+            Bindings.fivePercent.Text = quota.FiveHourAvailable ? quota.FiveHourRemainingPercent + "%" : "--";
+            Bindings.weekPercent.Text = quota.WeeklyAvailable ? quota.WeeklyRemainingPercent + "%" : "--";
             Bindings.weekUsed.Text = FormatTokens(usage.WeekTokens);
-            Bindings.fiveUsed.Text = "resets " + FormatResetCountdown(quota.FiveHourResetsAt);
-            UpdateMeter(Bindings.fiveFill, Bindings.fiveTrack, quota.Available, quota.FiveHourRemainingPercent);
-            UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.Available, quota.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
+            Bindings.fiveUsed.Text = quota.FiveHourAvailable
+                ? "resets " + FormatResetCountdown(quota.FiveHourResetsAt)
+                : "";
+            UpdateMeter(Bindings.fiveFill, Bindings.fiveTrack, quota.FiveHourAvailable, quota.FiveHourRemainingPercent);
+            UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.WeeklyAvailable, quota.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
         }
         if (Settings.minimax.enabled)
         {
@@ -1125,9 +1206,17 @@ class PopupWindow : Window
 
     void UpdateMeter(Border fill, Border track, bool available, int remaining, Color? overrideColor = null)
     {
+        double width = track.ActualWidth;
+        if (width <= 0) width = Width - 40;
+        if (!available)
+        {
+            fill.Background = new SolidColorBrush(MeterFillColor(false, remaining));
+            fill.Width = MeterFillWidth(false, remaining, width);
+            return;
+        }
+
         Color fillColor;
-        if (!available) fillColor = Color.FromRgb(100, 100, 110);
-        else if (overrideColor.HasValue) fillColor = overrideColor.Value;
+        if (overrideColor.HasValue) fillColor = overrideColor.Value;
         else fillColor = BarColors.ForPercent(remaining);
         fill.Background = new LinearGradientBrush(
             new GradientStopCollection {
@@ -1138,9 +1227,28 @@ class PopupWindow : Window
             },
             new Point(0, 0),
             new Point(0, 1));
-        double width = track.ActualWidth;
-        if (width <= 0) width = Width - 40;
-        fill.Width = Math.Max(4, width * Math.Max(0, Math.Min(100, remaining)) / 100.0);
+        fill.Width = MeterFillWidth(true, remaining, width);
+    }
+
+    static Color MeterFillColor(bool available, int remaining)
+    {
+        return available ? BarColors.ForPercent(remaining) : Colors.Black;
+    }
+
+    static double MeterFillWidth(bool available, int remaining, double trackWidth)
+    {
+        if (!available) return Math.Max(4, trackWidth);
+        return Math.Max(4, trackWidth * Math.Max(0, Math.Min(100, remaining)) / 100.0);
+    }
+
+    internal static Color MeterFillColorForTest(bool available, int remaining)
+    {
+        return MeterFillColor(available, remaining);
+    }
+
+    internal static double MeterFillWidthForTest(bool available, int remaining, double trackWidth)
+    {
+        return MeterFillWidth(available, remaining, trackWidth);
     }
 
     public void StartRefresh()
@@ -1430,8 +1538,33 @@ static class BitmapFactory
     }
 }
 
+enum TrayEdge
+{
+    Top,
+    Bottom
+}
+
 class TrayController : IDisposable
 {
+    const int PopupGap = 8;
+    const int AutoHideReserve = 64;
+    const int TrayAnchorTolerance = 32;
+    const uint SWP_NOSIZE = 0x0001;
+    const uint SWP_NOZORDER = 0x0004;
+    const uint SWP_NOACTIVATE = 0x0010;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct NativeRect
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
+
     readonly INotifyIconBackend _backend;
     readonly DashboardSettings _settings;
     readonly PopupWindow _popup;
@@ -1439,6 +1572,8 @@ class TrayController : IDisposable
     readonly DispatcherTimer _dismissTimer;
     readonly DispatcherTimer _cursorPollTimer;
     bool _cursorOverTray;
+    bool _hasTrayAnchor;
+    System.Drawing.Point _lastTrayPoint;
 
     public PopupWindow Popup { get { return _popup; } }
 
@@ -1460,9 +1595,8 @@ class TrayController : IDisposable
         };
 
         // Cursor poll: NotifyIcon has no MouseLeave event; poll Control.MousePosition
-        // every 100ms to detect when the cursor leaves the tray area (bottom 32px of
-        // work area, covering the default Windows taskbar position). Only run while
-        // the popup is visible — otherwise the dispatcher wastes cycles.
+        // every 100ms to detect when the cursor leaves the active monitor's top or
+        // bottom tray band. Only run while the popup is visible.
         _cursorPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _cursorPollTimer.Tick += delegate { OnCursorPollTick(); };
         _popup.IsVisibleChanged += delegate
@@ -1491,9 +1625,7 @@ class TrayController : IDisposable
             if (!_popup.IsSticky)
             {
                 _popup.EnterSticky();
-                if (!double.IsNaN(_settings.popupLeft)) _popup.Left = _settings.popupLeft;
-                if (!double.IsNaN(_settings.popupTop)) _popup.Top = _settings.popupTop;
-                _popup.Show();
+                ShowStickyPopup();
             }
             pinItem.Checked = _popup.IsSticky;
         };
@@ -1523,6 +1655,9 @@ class TrayController : IDisposable
 
     void OnTrayMouseMove()
     {
+        _dismissTimer.Stop();
+        _lastTrayPoint = System.Windows.Forms.Control.MousePosition;
+        _hasTrayAnchor = true;
         _cursorOverTray = true;
         if (!_hoverTimer.IsEnabled && !_popup.IsVisible) _hoverTimer.Start();
     }
@@ -1531,7 +1666,12 @@ class TrayController : IDisposable
     {
         System.Drawing.Point cursor = System.Windows.Forms.Control.MousePosition;
         bool overTrayArea = IsOverTrayArea(cursor);
-        if (_cursorOverTray && !overTrayArea)
+        if (overTrayArea)
+        {
+            _cursorOverTray = true;
+            _dismissTimer.Stop();
+        }
+        else if (_cursorOverTray)
         {
             _cursorOverTray = false;
             if (_popup.IsVisible && !_popup.IsSticky && !_popup.IsMouseOver)
@@ -1539,45 +1679,173 @@ class TrayController : IDisposable
                 _dismissTimer.Start();
             }
         }
-        else if (!_cursorOverTray && overTrayArea)
-        {
-            _cursorOverTray = true;
-        }
     }
 
     bool IsOverTrayArea(System.Drawing.Point cursor)
     {
-        Rect wa = SystemParameters.WorkArea;
-        // Default taskbar-at-bottom layout: tray icons sit in the right portion of the
-        // taskbar. Use cursor.Y >= wa.Bottom - 16 so any vertical position within the
-        // taskbar (default 48-56px tall, customizable) and a small margin above are
-        // treated as "still near the tray icon". Slight cursor drift on the taskbar must
-        // not trigger dismiss — the user has to deliberately leave the tray area.
-        return cursor.Y >= wa.Bottom - 16
-            && cursor.X >= wa.Right - 200;
+        // Use the cursor's own monitor's work area, not SystemParameters.WorkArea
+        // (which is the primary monitor only). On dual-screen setups where the
+        // tray icon lives on the secondary, the primary-only check would
+        // immediately fail and dismiss the popup 300ms after it appeared.
+        System.Windows.Forms.Screen screen = System.Windows.Forms.Screen.FromPoint(cursor);
+        if (screen == null) return false;
+        if (_hasTrayAnchor) return IsWithinTrayAnchor(cursor, _lastTrayPoint, TrayAnchorTolerance);
+        System.Drawing.Rectangle wa = screen.WorkingArea;
+        TrayEdge edge = InferTrayEdge(cursor, screen.Bounds);
+        bool inEdgeBand = edge == TrayEdge.Top
+            ? cursor.Y <= wa.Top + 16
+            : cursor.Y >= wa.Bottom - 16;
+        return inEdgeBand;
     }
 
-    void ShowPopup()
+    static bool IsWithinTrayAnchor(
+        System.Drawing.Point cursor, System.Drawing.Point anchor, int tolerance)
     {
-        if (!double.IsNaN(_settings.popupLeft) && !double.IsNaN(_settings.popupTop)
-            && IsOnScreen(_settings.popupLeft, _settings.popupTop, _popup.Width, _popup.Height))
+        return tolerance >= 0
+            && Math.Abs(cursor.X - anchor.X) <= tolerance
+            && Math.Abs(cursor.Y - anchor.Y) <= tolerance;
+    }
+
+    internal static bool IsWithinTrayAnchorForTest(
+        System.Drawing.Point cursor, System.Drawing.Point anchor, int tolerance)
+    {
+        return IsWithinTrayAnchor(cursor, anchor, tolerance);
+    }
+
+    public void ShowPopup()
+    {
+        ShowAutoPositionedPopup();
+    }
+
+    public void ShowStickyPopup()
+    {
+        Rect virtualDipBounds = new Rect(
+            SystemParameters.VirtualScreenLeft,
+            SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth,
+            SystemParameters.VirtualScreenHeight);
+        if (IsSavedDipPositionOnVirtualScreen(
+            _settings.popupLeft, _settings.popupTop, _popup.Width, _popup.Height, virtualDipBounds))
         {
-            _popup.Left = _settings.popupLeft; _popup.Top = _settings.popupTop;
+            _popup.Left = _settings.popupLeft;
+            _popup.Top = _settings.popupTop;
+            _popup.Show();
+            return;
+        }
+
+        ShowAutoPositionedPopup();
+    }
+
+    void ShowAutoPositionedPopup()
+    {
+        System.Drawing.Point cursorPos = System.Windows.Forms.Control.MousePosition;
+        System.Windows.Forms.Screen screen = System.Windows.Forms.Screen.FromPoint(cursorPos);
+
+        // Keep a visible WPF/DIP fallback in case native positioning is unavailable.
+        _popup.Left = SystemParameters.WorkArea.Right - _popup.Width - PopupGap;
+        _popup.Top = SystemParameters.WorkArea.Bottom - _popup.Height - PopupGap;
+        _popup.Show();
+
+        IntPtr hwnd = new WindowInteropHelper(_popup).Handle;
+        if (hwnd == IntPtr.Zero) return;
+
+        // Stage 1: move the HWND into the cursor's monitor. Crossing the monitor
+        // boundary can change its DPI-dependent size, so the old size is not used.
+        System.Drawing.Point probeOrigin = CalculateProbeOrigin(screen.Bounds, screen.WorkingArea);
+        if (!SetWindowPos(hwnd, IntPtr.Zero, probeOrigin.X, probeOrigin.Y, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)) return;
+
+        // Stage 2: remeasure in the target monitor's process-coordinate space, then
+        // calculate and apply the final origin without mixing in WPF DIP values.
+        NativeRect targetRect;
+        if (!GetWindowRect(hwnd, out targetRect)) return;
+        System.Drawing.Size targetSize = new System.Drawing.Size(
+            Math.Max(1, targetRect.Right - targetRect.Left),
+            Math.Max(1, targetRect.Bottom - targetRect.Top));
+        System.Drawing.Point finalOrigin = CalculatePopupOrigin(
+            cursorPos, screen.Bounds, screen.WorkingArea, targetSize);
+        // If this final move fails, the stage-1 probe remains safely visible.
+        if (!SetWindowPos(hwnd, IntPtr.Zero, finalOrigin.X, finalOrigin.Y, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)) return;
+    }
+
+    static bool IsSavedDipPositionOnVirtualScreen(
+        double left, double top, double width, double height, Rect virtualDipBounds)
+    {
+        if (double.IsNaN(left) || double.IsNaN(top) || width <= 0 || height <= 0) return false;
+        Rect savedRect = new Rect(left, top, width, height);
+        Rect visibleRect = Rect.Intersect(savedRect, virtualDipBounds);
+        return !visibleRect.IsEmpty && visibleRect.Width >= 50 && visibleRect.Height >= 50;
+    }
+
+    internal static bool IsSavedDipPositionOnVirtualScreenForTest(
+        double left, double top, double width, double height, Rect virtualDipBounds)
+    {
+        return IsSavedDipPositionOnVirtualScreen(left, top, width, height, virtualDipBounds);
+    }
+
+    static TrayEdge InferTrayEdge(System.Drawing.Point cursor, System.Drawing.Rectangle bounds)
+    {
+        int distanceToTop = Math.Abs(cursor.Y - bounds.Top);
+        int distanceToBottom = Math.Abs(bounds.Bottom - cursor.Y);
+        return distanceToTop <= distanceToBottom ? TrayEdge.Top : TrayEdge.Bottom;
+    }
+
+    internal static TrayEdge InferTrayEdgeForTest(System.Drawing.Point cursor, System.Drawing.Rectangle bounds)
+    {
+        return InferTrayEdge(cursor, bounds);
+    }
+
+    static System.Drawing.Point CalculateProbeOrigin(
+        System.Drawing.Rectangle bounds, System.Drawing.Rectangle workingArea)
+    {
+        int safeTop = Math.Max(workingArea.Top, bounds.Top + AutoHideReserve);
+        return new System.Drawing.Point(workingArea.Left + PopupGap, safeTop + PopupGap);
+    }
+
+    internal static System.Drawing.Point CalculateProbeOriginForTest(
+        System.Drawing.Rectangle bounds, System.Drawing.Rectangle workingArea)
+    {
+        return CalculateProbeOrigin(bounds, workingArea);
+    }
+
+    static System.Drawing.Point CalculatePopupOrigin(
+        System.Drawing.Point cursor,
+        System.Drawing.Rectangle bounds,
+        System.Drawing.Rectangle workingArea,
+        System.Drawing.Size popupSize)
+    {
+        TrayEdge edge = InferTrayEdge(cursor, bounds);
+        int x = cursor.X - popupSize.Width - PopupGap;
+        int minX = workingArea.Left + PopupGap;
+        int maxX = workingArea.Right - popupSize.Width - PopupGap;
+        x = Math.Max(minX, Math.Min(x, maxX));
+
+        int y;
+        if (edge == TrayEdge.Top)
+        {
+            int safeTop = Math.Max(workingArea.Top, bounds.Top + AutoHideReserve);
+            y = safeTop + PopupGap;
         }
         else
         {
-            // Default position: bottom-right of work area, anchored above where the
-            // auto-hidden taskbar might appear. When the taskbar is visible,
-            // WorkArea.Bottom is its top edge (use it directly); when the taskbar is
-            // auto-hidden, WorkArea.Bottom equals PrimaryScreenHeight, so we reserve
-            // MaxTaskbarReserve pixels at the bottom to keep the popup visible.
-            const double MaxTaskbarReserve = 64;
-            double bottomLimit = Math.Min(SystemParameters.WorkArea.Bottom,
-                SystemParameters.PrimaryScreenHeight - MaxTaskbarReserve);
-            _popup.Left = SystemParameters.WorkArea.Right - _popup.Width - 8;
-            _popup.Top = bottomLimit - _popup.Height - 8;
+            int safeBottom = Math.Min(workingArea.Bottom, bounds.Bottom - AutoHideReserve);
+            y = safeBottom - popupSize.Height - PopupGap;
         }
-        _popup.Show();
+
+        int minY = workingArea.Top + PopupGap;
+        int maxY = workingArea.Bottom - popupSize.Height - PopupGap;
+        y = Math.Max(minY, Math.Min(y, maxY));
+        return new System.Drawing.Point(x, y);
+    }
+
+    internal static System.Drawing.Point CalculatePopupOriginForTest(
+        System.Drawing.Point cursor,
+        System.Drawing.Rectangle bounds,
+        System.Drawing.Rectangle workingArea,
+        System.Drawing.Size popupSize)
+    {
+        return CalculatePopupOrigin(cursor, bounds, workingArea, popupSize);
     }
 
     public void Dispose()
@@ -1589,13 +1857,6 @@ class TrayController : IDisposable
         _backend.Dispose();
     }
 
-    static bool IsOnScreen(double left, double top, double width, double height)
-    {
-        if (double.IsNaN(left) || double.IsNaN(top) || width <= 0 || height <= 0) return false;
-        double vsL = SystemParameters.VirtualScreenLeft, vsT = SystemParameters.VirtualScreenTop;
-        double vsR = vsL + SystemParameters.VirtualScreenWidth, vsB = vsT + SystemParameters.VirtualScreenHeight;
-        return left + width - 50 > vsL && left + 50 < vsR && top + height - 50 > vsT && top + 50 < vsB;
-    }
 }
 
 static class Program
@@ -1620,9 +1881,7 @@ static class Program
         if (settings.popupStickyOnLaunch)
         {
             popup.EnterSticky();
-            popup.Left = double.IsNaN(settings.popupLeft) ? SystemParameters.WorkArea.Right - popup.Width - 8 : settings.popupLeft;
-            popup.Top = double.IsNaN(settings.popupTop) ? SystemParameters.WorkArea.Top + 72 : settings.popupTop;
-            popup.Show();
+            controller.ShowStickyPopup();
         }
 
         app.Run(bootstrapper);
