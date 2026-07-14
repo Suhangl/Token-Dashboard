@@ -93,6 +93,10 @@ static class ProgramTests
             "unavailable meter uses a full-width indicator");
         Expect(PopupWindow.MeterFillColorForTest(false, 50) == System.Windows.Media.Colors.Black,
             "unavailable meter uses a black indicator");
+        Expect(PopupWindow.MeterFillColorForTest(true, 50) != System.Windows.Media.Colors.Black,
+            "quiet glass available allowance fill is not black");
+        Expect(QuietGlassPalette.UnavailableAllowance == System.Windows.Media.Colors.Black,
+            "quiet glass unavailable allowance fill is black");
         Expect(CodexAppServerQuota.ParseJsonRpcId("not json") == null, "JSON-RPC ignores non-JSON");
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"id\":1}") == 1, "JSON-RPC id:1 (not target)");
 
@@ -248,6 +252,14 @@ static class ProgramTests
                 Expect(result.Root != null, "BuildUiFactory " + names[i] + " returns non-null root");
                 Expect(result.Bindings != null, "BuildUiFactory " + names[i] + " returns non-null bindings");
                 Expect(result.Bindings.stickyPinButton != null, "BuildUiFactory " + names[i] + " populates stickyPinButton");
+                System.Windows.Controls.Border quietShell = result.Root as System.Windows.Controls.Border;
+                Expect(quietShell != null && quietShell.Margin.Left >= 6 && quietShell.Margin.Top >= 6,
+                    "Quiet Glass shell reserves an outer shadow gutter");
+                if (configs[i].codex.enabled)
+                    Expect(result.Bindings.codexTokenUsage != null, "Codex section exposes its token usage binding");
+                if (configs[i].minimax.enabled)
+                    Expect(result.Bindings.miniFiveTrack != null && result.Bindings.miniWeekTrack != null,
+                        "MiniMax retains both 5H and W tracks");
             }
             catch (Exception ex)
             {

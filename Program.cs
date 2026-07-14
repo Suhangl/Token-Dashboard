@@ -215,19 +215,20 @@ class HistoryRing
     public int? Current { get { return count > 0 ? buf[(head - 1 + capacity) % capacity].Percent : (int?)null; } }
 }
 
-static class BarColors
+static class QuietGlassPalette
 {
-    public static Color ForPercent(int p)
-    {
-        if (p >= 50) return Color.FromRgb(74, 222, 128);
-        if (p >= 20) return Color.FromRgb(245, 180, 55);
-        return Color.FromRgb(236, 83, 83);
-    }
-    public static Color BurnGhost(Color baseColor, int level)
-    {
-        double factor = level == 1 ? 0.45 : level == 2 ? 0.28 : 0.14;
-        return Color.FromArgb((byte)(255 * factor), baseColor.R, baseColor.G, baseColor.B);
-    }
+    public static readonly Color ShellTop = Color.FromArgb(232, 34, 36, 40);
+    public static readonly Color ShellBottom = Color.FromArgb(222, 20, 22, 25);
+    public static readonly Color ShellHighlight = Color.FromArgb(42, 255, 255, 255);
+    public static readonly Color InnerHighlight = Color.FromArgb(229, 40, 42, 46);
+    public static readonly Color Divider = Color.FromArgb(20, 255, 255, 255);
+    public static readonly Color Shadow = Colors.Black;
+    public static readonly Color Track = Color.FromArgb(92, 72, 76, 82);
+    public static readonly Color AvailableAllowance = Color.FromRgb(198, 201, 204);
+    public static readonly Color UnavailableAllowance = Colors.Black;
+    public static readonly Color PrimaryText = Color.FromRgb(232, 234, 236);
+    public static readonly Color SecondaryText = Color.FromRgb(145, 149, 154);
+    public static readonly Color SectionText = Color.FromRgb(132, 136, 142);
 }
 
 class MiniMaxSettings { public bool enabled = false; public string mmxPath = ""; public string region = "cn"; public string quotaModelName = "MiniMax-M*"; }
@@ -752,8 +753,9 @@ class Bindings
 {
     public TextBlock timeText, codexHeading, miniHeading, deepSeekHeading;
     public TextBlock fivePercent, fiveUsed, weekPercent, weekUsed;
+    public TextBlock codexTokenUsage;
     public TextBlock miniFivePercent, miniFiveUsed, miniWeekPercent, miniWeekUsed;
-    public TextBlock deepSeekPercent, deepSeekUsed, footerLeft, footerRight, footerSub;
+    public TextBlock deepSeekPercent, deepSeekUsed, footerSub;
     public System.Windows.Shapes.Ellipse statusDot, statusGlow;
     public System.Windows.Controls.Border fiveFill, fiveTrack, weekFill, weekTrack;
     public System.Windows.Controls.Border miniFiveFill, miniFiveTrack, miniWeekFill, miniWeekTrack;
@@ -774,11 +776,22 @@ static class BuildUiFactory
         Bindings b = new Bindings();
         Border shell = new Border();
         shell.CornerRadius = new CornerRadius(Math.Max(0, Math.Min(30, settings.glass != null ? settings.glass.cornerRadius : 15)));
-        shell.Background = new SolidColorBrush(Color.FromArgb(112, 28, 33, 48));
+        shell.Background = new LinearGradientBrush(
+            new GradientStopCollection {
+                new GradientStop(QuietGlassPalette.ShellTop, 0),
+                new GradientStop(QuietGlassPalette.InnerHighlight, 0.025),
+                new GradientStop(QuietGlassPalette.ShellBottom, 1)
+            },
+            new Point(0, 0),
+            new Point(1, 1));
+        shell.BorderBrush = new SolidColorBrush(QuietGlassPalette.ShellHighlight);
+        shell.BorderThickness = new Thickness(1);
+        shell.Margin = new Thickness(8);
+        shell.Effect = new DropShadowEffect { Color = QuietGlassPalette.Shadow, BlurRadius = 12, ShadowDepth = 2, Opacity = 0.28 };
         shell.ClipToBounds = true; shell.SnapsToDevicePixels = true;
 
         Grid grid = new Grid();
-        grid.Margin = new Thickness(20, 16, 20, 14);
+        grid.Margin = new Thickness(11, 7, 11, 5);
         int row = 0;
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(24) });
 
@@ -790,10 +803,10 @@ static class BuildUiFactory
         b.statusGlow = new System.Windows.Shapes.Ellipse { Width = 17, Height = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         b.statusDot = new System.Windows.Shapes.Ellipse { Width = 5.5, Height = 5.5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         lamp.Children.Add(b.statusGlow); lamp.Children.Add(b.statusDot);
-        b.timeText = MakeText("", 12, 0, 170, 184, 204, FontWeights.SemiBold);
+        b.timeText = MakeText("", 12, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Medium);
         b.timeText.HorizontalAlignment = HorizontalAlignment.Center;
         Grid pinHit = new Grid { Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Right };
-        System.Windows.Shapes.Ellipse pin = new System.Windows.Shapes.Ellipse { Width = 16, Height = 16, Stroke = new SolidColorBrush(Color.FromRgb(230, 230, 230)), StrokeThickness = 1.5, Fill = Brushes.Transparent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        System.Windows.Shapes.Ellipse pin = new System.Windows.Shapes.Ellipse { Width = 16, Height = 16, Stroke = new SolidColorBrush(QuietGlassPalette.PrimaryText), StrokeThickness = 1.5, Fill = Brushes.Transparent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         pinHit.Children.Add(pin);
         ToolTipService.SetToolTip(pinHit, "钉住 popup");
         b.stickyPinButton = pinHit;
@@ -851,13 +864,9 @@ static class BuildUiFactory
     static void AppendFooter(Grid grid, Bindings b, int row)
     {
         Grid footer = new Grid();
-        footer.RowDefinitions.Add(new RowDefinition()); footer.RowDefinitions.Add(new RowDefinition());
-        footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition());
-        b.footerLeft = MakeText("", 11, 0, 150, 164, 184, FontWeights.Normal);
-        b.footerRight = MakeText("", 11, 0, 158, 174, 196, FontWeights.Normal); b.footerRight.HorizontalAlignment = HorizontalAlignment.Right;
-        b.footerSub = MakeText("", 10.5, 0, 110, 124, 146, FontWeights.Normal); b.footerSub.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(b.footerRight, 1); footer.Children.Add(b.footerLeft); footer.Children.Add(b.footerRight);
-        Grid.SetRow(b.footerSub, 1); Grid.SetColumnSpan(b.footerSub, 2); footer.Children.Add(b.footerSub);
+        b.footerSub = MakeText("", 10.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal);
+        b.footerSub.HorizontalAlignment = HorizontalAlignment.Right;
+        footer.Children.Add(b.footerSub);
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
         Grid.SetRow(footer, row); grid.Children.Add(footer);
     }
@@ -869,7 +878,7 @@ static class BuildUiFactory
 
     static TextBlock AddSectionHeader(Grid parent, int row, string label)
     {
-        TextBlock heading = MakeText(label, 10.5, 0, 130, 147, 170, FontWeights.SemiBold);
+        TextBlock heading = MakeText(label, 10.5, 0, QuietGlassPalette.SectionText.R, QuietGlassPalette.SectionText.G, QuietGlassPalette.SectionText.B, FontWeights.Medium);
         heading.VerticalAlignment = VerticalAlignment.Bottom;
         Grid.SetRow(heading, row); parent.Children.Add(heading);
         return heading;
@@ -877,11 +886,11 @@ static class BuildUiFactory
 
     static void AddDivider(Grid parent, int row)
     {
-        Border line = new Border { Height = 1, Background = new SolidColorBrush(Color.FromArgb(20, 255, 255, 255)), Margin = new Thickness(0, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        Border line = new Border { Height = 1, Background = new SolidColorBrush(QuietGlassPalette.Divider), Margin = new Thickness(0, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         Grid.SetRow(line, row); parent.Children.Add(line);
     }
 
-    static Border BarTrack(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromArgb(50, 80, 90, 110)), VerticalAlignment = VerticalAlignment.Top }; }
+    static Border BarTrack(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(QuietGlassPalette.Track), VerticalAlignment = VerticalAlignment.Top }; }
     static Border BarFill(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top }; }
 
     enum BarSide { Codex, MiniMax }
@@ -905,16 +914,17 @@ static class BuildUiFactory
         block.ColumnDefinitions.Add(new ColumnDefinition());
         block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
         block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });
-        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(18) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 18 : 20) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 7 : 8) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 3 : 4) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 14 : 18) });
+        if (isCodex) block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(13) });
 
-        TextBlock fivePct = MakeText("--", 14, 0, 248, 251, 255, FontWeights.Bold); fivePct.HorizontalAlignment = HorizontalAlignment.Right;
-        TextBlock fiveUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); fiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        TextBlock fivePct = MakeText("--", 14, 0, QuietGlassPalette.PrimaryText.R, QuietGlassPalette.PrimaryText.G, QuietGlassPalette.PrimaryText.B, FontWeights.SemiBold); fivePct.HorizontalAlignment = HorizontalAlignment.Right;
+        TextBlock fiveUsed = MakeText("", 10, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal); fiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
         Border fiveTrack = BarTrack(8); Border fiveFill = BarFill(8);
-        TextBlock weekPct = MakeText("--", 12, 0, 210, 220, 230, FontWeights.Bold); weekPct.HorizontalAlignment = HorizontalAlignment.Right;
-        TextBlock weekUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); weekUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        TextBlock weekPct = MakeText("--", 12, 0, QuietGlassPalette.PrimaryText.R, QuietGlassPalette.PrimaryText.G, QuietGlassPalette.PrimaryText.B, FontWeights.Medium); weekPct.HorizontalAlignment = HorizontalAlignment.Right;
+        TextBlock weekUsed = MakeText("", 10, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal); weekUsed.HorizontalAlignment = HorizontalAlignment.Right;
         Border weekTrack = BarTrack(4); Border weekFill = BarFill(4);
 
         if (isCodex)
@@ -932,7 +942,7 @@ static class BuildUiFactory
             b.miniWeekTrack = weekTrack; b.miniWeekFill = weekFill;
         }
 
-        TextBlock fLabel = MakeText("5H", 13, 0, 232, 240, 250, FontWeights.SemiBold);
+        TextBlock fLabel = MakeText("5H", 10.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Medium);
         Grid.SetColumn(fiveUsed, 2); Grid.SetColumn(fivePct, 3);
         Grid.SetRow(fLabel, 0); Grid.SetRow(fiveUsed, 0); Grid.SetRow(fivePct, 0);
         block.Children.Add(fLabel); block.Children.Add(fiveUsed); block.Children.Add(fivePct);
@@ -943,10 +953,18 @@ static class BuildUiFactory
         Grid barW = new Grid(); barW.Children.Add(weekTrack); barW.Children.Add(weekFill);
         Grid.SetRow(barW, 2); Grid.SetColumnSpan(barW, 4); block.Children.Add(barW);
 
-        TextBlock wLabel = MakeText("W", 11, 0, 170, 184, 204, FontWeights.Normal);
+        TextBlock wLabel = MakeText("W", 10.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal);
         Grid.SetColumn(weekUsed, 2); Grid.SetColumn(weekPct, 3);
         Grid.SetRow(wLabel, 3); Grid.SetRow(weekUsed, 3); Grid.SetRow(weekPct, 3);
         block.Children.Add(wLabel); block.Children.Add(weekUsed); block.Children.Add(weekPct);
+
+        if (isCodex)
+        {
+            b.codexTokenUsage = MakeText("", 9.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal);
+            b.codexTokenUsage.HorizontalAlignment = HorizontalAlignment.Right;
+            Grid.SetRow(b.codexTokenUsage, 4); Grid.SetColumnSpan(b.codexTokenUsage, 4);
+            block.Children.Add(b.codexTokenUsage);
+        }
 
         Grid.SetRow(block, row); parent.Children.Add(block);
     }
@@ -961,9 +979,9 @@ static class BuildUiFactory
         line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
         line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(barH + 4) });
 
-        TextBlock lt = MakeText(label, 13, 0, 232, 240, 250, FontWeights.SemiBold);
-        b.deepSeekPercent = MakeText("--", 14, 0, 248, 251, 255, FontWeights.Bold); b.deepSeekPercent.HorizontalAlignment = HorizontalAlignment.Right;
-        b.deepSeekUsed = MakeText("", 10, 0, 145, 160, 182, FontWeights.Normal); b.deepSeekUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        TextBlock lt = MakeText(label, 10.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Medium);
+        b.deepSeekPercent = MakeText("--", 14, 0, QuietGlassPalette.PrimaryText.R, QuietGlassPalette.PrimaryText.G, QuietGlassPalette.PrimaryText.B, FontWeights.SemiBold); b.deepSeekPercent.HorizontalAlignment = HorizontalAlignment.Right;
+        b.deepSeekUsed = MakeText("", 10, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal); b.deepSeekUsed.HorizontalAlignment = HorizontalAlignment.Right;
         Grid.SetColumn(b.deepSeekUsed, 2); Grid.SetColumn(b.deepSeekPercent, 3);
         line.Children.Add(lt); line.Children.Add(b.deepSeekUsed); line.Children.Add(b.deepSeekPercent);
 
@@ -1205,7 +1223,8 @@ class PopupWindow : Window
                 ? PresentationText.TMinus(quota.FiveHourResetsAt, DateTime.Now)
                 : "";
             UpdateMeter(Bindings.fiveFill, Bindings.fiveTrack, quota.FiveHourAvailable, quota.FiveHourRemainingPercent);
-            UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.WeeklyAvailable, quota.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
+            UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.WeeklyAvailable, quota.WeeklyRemainingPercent);
+            Bindings.codexTokenUsage.Text = quota.Available ? "tokens " + FormatTokens(usage.TotalTokens) : "";
         }
         if (Settings.minimax.enabled)
         {
@@ -1214,7 +1233,7 @@ class PopupWindow : Window
             Bindings.miniFiveUsed.Text = PresentationText.MiniMaxTMinus(minimax.RemainsTime);
             Bindings.miniWeekUsed.Text = "";
             UpdateMeter(Bindings.miniFiveFill, Bindings.miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent);
-            UpdateMeter(Bindings.miniWeekFill, Bindings.miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent, Color.FromRgb(115, 130, 150));
+            UpdateMeter(Bindings.miniWeekFill, Bindings.miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent);
             string miniTip = (minimax.IsStale ? "Stale: " : "") + minimax.Status;
             if (!string.IsNullOrEmpty(minimax.RemainsTime)) miniTip += "\n5h: " + minimax.RemainsTime;
             Bindings.miniHeading.ToolTip = miniTip;
@@ -1234,16 +1253,6 @@ class PopupWindow : Window
             Bindings.deepSeekPercent.ToolTip = deepTip;
             Bindings.deepSeekUsed.ToolTip = deepTip;
         }
-        if (Settings.codex.enabled)
-        {
-            Bindings.footerLeft.Text = quota.Available ? "tokens " + FormatTokens(usage.TotalTokens) : "";
-            Bindings.footerRight.Text = "";
-        }
-        else
-        {
-            Bindings.footerLeft.Text = "";
-            Bindings.footerRight.Text = "";
-        }
     }
 
     decimal EstimateCost()
@@ -1253,7 +1262,7 @@ class PopupWindow : Window
         return ProviderMath.EstimatedCostPerRequest(Settings.deepseek.estimate.averageInputTokens, Settings.deepseek.estimate.averageOutputTokens, Settings.deepseek.estimate.cacheHitRatio, price.inputCacheHit, price.inputCacheMiss, price.output);
     }
 
-    void UpdateMeter(Border fill, Border track, bool available, int remaining, Color? overrideColor = null)
+    void UpdateMeter(Border fill, Border track, bool available, int remaining)
     {
         double width = track.ActualWidth;
         if (width <= 0) width = Width - 40;
@@ -1264,24 +1273,13 @@ class PopupWindow : Window
             return;
         }
 
-        Color fillColor;
-        if (overrideColor.HasValue) fillColor = overrideColor.Value;
-        else fillColor = BarColors.ForPercent(remaining);
-        fill.Background = new LinearGradientBrush(
-            new GradientStopCollection {
-                new GradientStop(Color.FromArgb(130, 255, 255, 255), 0),
-                new GradientStop(Color.FromArgb(245, (byte)Math.Min(255, fillColor.R + 24), (byte)Math.Min(255, fillColor.G + 24), (byte)Math.Min(255, fillColor.B + 24)), 0.18),
-                new GradientStop(fillColor, 0.6),
-                new GradientStop(Color.FromArgb(238, (byte)Math.Max(0, fillColor.R - 16), (byte)Math.Max(0, fillColor.G - 16), (byte)Math.Max(0, fillColor.B - 16)), 1)
-            },
-            new Point(0, 0),
-            new Point(0, 1));
+        fill.Background = new SolidColorBrush(MeterFillColor(true, remaining));
         fill.Width = MeterFillWidth(true, remaining, width);
     }
 
     static Color MeterFillColor(bool available, int remaining)
     {
-        return available ? BarColors.ForPercent(remaining) : Colors.Black;
+        return available ? QuietGlassPalette.AvailableAllowance : QuietGlassPalette.UnavailableAllowance;
     }
 
     static double MeterFillWidth(bool available, int remaining, double trackWidth)
