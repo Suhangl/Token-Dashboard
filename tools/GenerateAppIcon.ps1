@@ -20,18 +20,19 @@ function New-QuietGlassPng {
     param([int]$Size)
 
     $bitmap = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     try {
-        $graphics.Clear([System.Drawing.Color]::Transparent)
-        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
-        $scale = $Size / 16.0
-        $small = $Size -le 32
-        $inset = if ($small) { [Math]::Max(1.7, 2.0 * $scale) } else { 2.15 * $scale }
-        $stroke = if ($small) { [Math]::Max(1.35, 1.55 * $scale) } else { 1.72 * $scale }
-        $ring = New-Object System.Drawing.RectangleF(
-            [single]$inset, [single]$inset,
-            [single]($Size - 2.0 * $inset), [single]($Size - 2.0 * $inset))
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.Clear([System.Drawing.Color]::Transparent)
+            $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+            $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+            $scale = $Size / 16.0
+            $small = $Size -le 32
+            $inset = if ($small) { [Math]::Max(1.7, 2.0 * $scale) } else { 2.15 * $scale }
+            $stroke = if ($small) { [Math]::Max(1.35, 1.55 * $scale) } else { 1.72 * $scale }
+            $ring = New-Object System.Drawing.RectangleF(
+                [single]$inset, [single]$inset,
+                [single]($Size - 2.0 * $inset), [single]($Size - 2.0 * $inset))
 
         if (-not $small) {
             $shadowRing = $ring
@@ -98,17 +99,16 @@ function New-QuietGlassPng {
         }
         finally { $healthy.Dispose() }
 
-        $stream = New-Object System.IO.MemoryStream
-        try {
-            $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-            return ,$stream.ToArray()
+            $stream = New-Object System.IO.MemoryStream
+            try {
+                $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+                return ,$stream.ToArray()
+            }
+            finally { $stream.Dispose() }
         }
-        finally { $stream.Dispose() }
+        finally { $graphics.Dispose() }
     }
-    finally {
-        $graphics.Dispose()
-        $bitmap.Dispose()
-    }
+    finally { $bitmap.Dispose() }
 }
 
 function Write-QuietGlassIco {
@@ -122,32 +122,32 @@ function Write-QuietGlassIco {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
     $stream = New-Object System.IO.MemoryStream
-    $writer = New-Object System.IO.BinaryWriter($stream)
     try {
-        $writer.Write([uint16]0)
-        $writer.Write([uint16]1)
-        $writer.Write([uint16]$iconSizes.Count)
-        $offset = 6 + 16 * $iconSizes.Count
-        for ($index = 0; $index -lt $iconSizes.Count; $index++) {
-            $sizeByte = if ($iconSizes[$index] -eq 256) { 0 } else { $iconSizes[$index] }
-            $writer.Write([byte]$sizeByte)
-            $writer.Write([byte]$sizeByte)
-            $writer.Write([byte]0)
-            $writer.Write([byte]0)
+        $writer = New-Object System.IO.BinaryWriter($stream)
+        try {
+            $writer.Write([uint16]0)
             $writer.Write([uint16]1)
-            $writer.Write([uint16]32)
-            $writer.Write([uint32]$payloads[$index].Length)
-            $writer.Write([uint32]$offset)
-            $offset += $payloads[$index].Length
+            $writer.Write([uint16]$iconSizes.Count)
+            $offset = 6 + 16 * $iconSizes.Count
+            for ($index = 0; $index -lt $iconSizes.Count; $index++) {
+                $sizeByte = if ($iconSizes[$index] -eq 256) { 0 } else { $iconSizes[$index] }
+                $writer.Write([byte]$sizeByte)
+                $writer.Write([byte]$sizeByte)
+                $writer.Write([byte]0)
+                $writer.Write([byte]0)
+                $writer.Write([uint16]1)
+                $writer.Write([uint16]32)
+                $writer.Write([uint32]$payloads[$index].Length)
+                $writer.Write([uint32]$offset)
+                $offset += $payloads[$index].Length
+            }
+            foreach ($payload in $payloads) { $writer.Write($payload) }
+            $writer.Flush()
+            [System.IO.File]::WriteAllBytes($Path, $stream.ToArray())
         }
-        foreach ($payload in $payloads) { $writer.Write($payload) }
-        $writer.Flush()
-        [System.IO.File]::WriteAllBytes($Path, $stream.ToArray())
+        finally { $writer.Dispose() }
     }
-    finally {
-        $writer.Dispose()
-        $stream.Dispose()
-    }
+    finally { $stream.Dispose() }
 }
 
 function Test-QuietGlassIco {
@@ -156,118 +156,135 @@ function Test-QuietGlassIco {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "ICO not found: $Path" }
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     $stream = New-Object System.IO.MemoryStream(,$bytes)
-    $reader = New-Object System.IO.BinaryReader($stream)
     try {
-        if ($reader.ReadUInt16() -ne 0 -or $reader.ReadUInt16() -ne 1) { throw "Invalid ICO header." }
-        $count = $reader.ReadUInt16()
-        if ($count -ne $iconSizes.Count) { throw "Expected 8 ICO entries, found $count." }
-        $previousEnd = 6 + 16 * $count
-        for ($index = 0; $index -lt $count; $index++) {
-            $encodedWidth = $reader.ReadByte()
-            $encodedHeight = $reader.ReadByte()
-            $width = if ($encodedWidth -eq 0) { 256 } else { [int]$encodedWidth }
-            $height = if ($encodedHeight -eq 0) { 256 } else { [int]$encodedHeight }
-            [void]$reader.ReadByte()
-            [void]$reader.ReadByte()
-            $planes = $reader.ReadUInt16()
-            $bitCount = $reader.ReadUInt16()
-            $length = $reader.ReadUInt32()
-            $offset = $reader.ReadUInt32()
-            if ($width -ne $iconSizes[$index] -or $height -ne $iconSizes[$index]) {
-                throw "Unexpected ICO size at entry $index`: ${width}x${height}."
-            }
-            if ($planes -ne 1 -or $bitCount -ne 32) { throw "Invalid format metadata at entry $index." }
-            if ($offset -ne $previousEnd -or $length -le 8 -or $offset + $length -gt $bytes.Length) {
-                throw "Invalid PNG offset or length at entry $index."
-            }
-            for ($signatureIndex = 0; $signatureIndex -lt $pngSignature.Count; $signatureIndex++) {
-                if ($bytes[$offset + $signatureIndex] -ne $pngSignature[$signatureIndex]) {
-                    throw "Entry $index is not PNG-backed."
+        $reader = New-Object System.IO.BinaryReader($stream)
+        try {
+            if ($reader.ReadUInt16() -ne 0 -or $reader.ReadUInt16() -ne 1) { throw "Invalid ICO header." }
+            $count = $reader.ReadUInt16()
+            if ($count -ne $iconSizes.Count) { throw "Expected 8 ICO entries, found $count." }
+            $previousEnd = 6 + 16 * $count
+            for ($index = 0; $index -lt $count; $index++) {
+                $encodedWidth = $reader.ReadByte()
+                $encodedHeight = $reader.ReadByte()
+                $width = if ($encodedWidth -eq 0) { 256 } else { [int]$encodedWidth }
+                $height = if ($encodedHeight -eq 0) { 256 } else { [int]$encodedHeight }
+                [void]$reader.ReadByte()
+                [void]$reader.ReadByte()
+                $planes = $reader.ReadUInt16()
+                $bitCount = $reader.ReadUInt16()
+                $length = $reader.ReadUInt32()
+                $offset = $reader.ReadUInt32()
+                if ($width -ne $iconSizes[$index] -or $height -ne $iconSizes[$index]) {
+                    throw "Unexpected ICO size at entry $index`: ${width}x${height}."
                 }
-            }
-            if ($width -eq 16 -or $width -eq 32 -or $width -eq 256) {
+                if ($planes -ne 1 -or $bitCount -ne 32) { throw "Invalid format metadata at entry $index." }
+                if ($offset -ne $previousEnd -or $length -le 8 -or $offset + $length -gt $bytes.Length) {
+                    throw "Invalid PNG offset or length at entry $index."
+                }
+                for ($signatureIndex = 0; $signatureIndex -lt $pngSignature.Count; $signatureIndex++) {
+                    if ($bytes[$offset + $signatureIndex] -ne $pngSignature[$signatureIndex]) {
+                        throw "Entry $index is not PNG-backed."
+                    }
+                }
                 $png = New-Object byte[] $length
                 [Array]::Copy($bytes, [int]$offset, $png, 0, [int]$length)
                 $pngStream = New-Object System.IO.MemoryStream(,$png)
-                $bitmap = New-Object System.Drawing.Bitmap($pngStream)
                 try {
-                    if ($bitmap.Width -ne $width -or $bitmap.Height -ne $height) {
-                        throw "PNG dimensions disagree with ICO entry $index."
-                    }
-                    $lastX = $width - 1
-                    $lastY = $height - 1
-                    foreach ($point in @(@(0, 0), @($lastX, 0), @(0, $lastY), @($lastX, $lastY))) {
-                        if ($bitmap.GetPixel($point[0], $point[1]).A -ne 0) {
-                            throw "Representative ${width}px PNG does not have transparent corners."
+                    $bitmap = New-Object System.Drawing.Bitmap($pngStream)
+                    try {
+                        if ($bitmap.Width -ne $width -or $bitmap.Height -ne $height) {
+                            throw "PNG dimensions disagree with ICO entry $index."
+                        }
+                        $lastX = $width - 1
+                        $lastY = $height - 1
+                        foreach ($point in @(@(0, 0), @($lastX, 0), @(0, $lastY), @($lastX, $lastY))) {
+                            if ($bitmap.GetPixel($point[0], $point[1]).A -ne 0) {
+                                throw "${width}px PNG does not have transparent corners."
+                            }
                         }
                     }
+                    finally { $bitmap.Dispose() }
                 }
-                finally {
-                    $bitmap.Dispose()
-                    $pngStream.Dispose()
-                }
+                finally { $pngStream.Dispose() }
+                $previousEnd = [int]($offset + $length)
             }
-            $previousEnd = [int]($offset + $length)
+            if ($previousEnd -ne $bytes.Length) { throw "ICO contains trailing or unreferenced bytes." }
         }
-        if ($previousEnd -ne $bytes.Length) { throw "ICO contains trailing or unreferenced bytes." }
+        finally { $reader.Dispose() }
     }
-    finally {
-        $reader.Dispose()
-        $stream.Dispose()
+    finally { $stream.Dispose() }
+    Write-Host "Verified ICO: exactly $($iconSizes -join ', ') px, all PNG payloads decoded, contiguous offsets, transparent corners."
+}
+
+function Render-IconFrame {
+    param([int]$Size, [int]$Cell)
+
+    $tile = New-Object System.Drawing.Bitmap($Cell, $Cell)
+    try {
+        $tileGraphics = [System.Drawing.Graphics]::FromImage($tile)
+        try {
+            $tileGraphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+            $tileGraphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+            $darkTile = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 61, 61, 61))
+            try {
+                $lightTile = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 78, 78, 78))
+                try {
+                    for ($cy = 0; $cy -lt $Cell; $cy += 16) {
+                        for ($cx = 0; $cx -lt $Cell; $cx += 16) {
+                            $brush = if ((($cx / 16) + ($cy / 16)) % 2 -eq 0) { $darkTile } else { $lightTile }
+                            $tileGraphics.FillRectangle($brush, $cx, $cy, 16, 16)
+                        }
+                    }
+                    $pngStream = New-Object System.IO.MemoryStream(,(New-QuietGlassPng -Size $Size))
+                    try {
+                        $sample = New-Object System.Drawing.Bitmap($pngStream)
+                        try { $tileGraphics.DrawImage($sample, 0, 0, $Cell, $Cell) }
+                        finally { $sample.Dispose() }
+                    }
+                    finally { $pngStream.Dispose() }
+                }
+                finally { $lightTile.Dispose() }
+            }
+            finally { $darkTile.Dispose() }
+        }
+        finally { $tileGraphics.Dispose() }
+        return $tile
     }
-    Write-Host "Verified ICO: exactly $($iconSizes -join ', ') px, PNG-backed, contiguous offsets, transparent representative corners."
+    catch {
+        $tile.Dispose()
+        throw
+    }
 }
 
 function Write-ContactSheet {
     param([string]$Path)
 
     $sheet = New-Object System.Drawing.Bitmap(760, 340, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $graphics = [System.Drawing.Graphics]::FromImage($sheet)
     try {
-        $graphics.Clear([System.Drawing.Color]::FromArgb(255, 25, 31, 39))
-        $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
-        $samples = @(16, 32, 256)
-        $x = 30
-        foreach ($size in $samples) {
-            $cell = if ($size -eq 256) { 256 } else { 128 }
-            $tile = New-Object System.Drawing.Bitmap($cell, $cell)
-            $tileGraphics = [System.Drawing.Graphics]::FromImage($tile)
-            $darkTile = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 61, 61, 61))
-            $lightTile = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 78, 78, 78))
-            $pngStream = New-Object System.IO.MemoryStream(,(New-QuietGlassPng -Size $size))
-            $sample = New-Object System.Drawing.Bitmap($pngStream)
-            try {
-                $tileGraphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
-                $tileGraphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
-                for ($cy = 0; $cy -lt $cell; $cy += 16) {
-                    for ($cx = 0; $cx -lt $cell; $cx += 16) {
-                        $brush = if ((($cx / 16) + ($cy / 16)) % 2 -eq 0) { $darkTile } else { $lightTile }
-                        $tileGraphics.FillRectangle($brush, $cx, $cy, 16, 16)
-                    }
+        $graphics = [System.Drawing.Graphics]::FromImage($sheet)
+        try {
+            $graphics.Clear([System.Drawing.Color]::FromArgb(255, 25, 31, 39))
+            $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+            $samples = @(16, 32, 256)
+            $x = 30
+            foreach ($size in $samples) {
+                $cell = if ($size -eq 256) { 256 } else { 128 }
+                $tile = Render-IconFrame -Size $size -Cell $cell
+                try {
+                    $graphics.DrawImage($tile, $x, 48, $cell, $cell)
+                    $scaleLabel = if ($cell -eq $size) { "native" } else { "x$([int]($cell / $size)) nearest" }
+                    $graphics.DrawString("${size}px ($scaleLabel)", [System.Drawing.SystemFonts]::MessageBoxFont, [System.Drawing.Brushes]::White, $x, 18)
                 }
-                $tileGraphics.DrawImage($sample, 0, 0, $cell, $cell)
+                finally { $tile.Dispose() }
+                $x += $cell + 45
             }
-            finally {
-                $sample.Dispose()
-                $pngStream.Dispose()
-                $darkTile.Dispose()
-                $lightTile.Dispose()
-                $tileGraphics.Dispose()
-            }
-            $graphics.DrawImage($tile, $x, 48, $cell, $cell)
-            $tile.Dispose()
-            $scaleLabel = if ($cell -eq $size) { "native" } else { "x$([int]($cell / $size)) nearest" }
-            $graphics.DrawString("${size}px ($scaleLabel)", [System.Drawing.SystemFonts]::MessageBoxFont, [System.Drawing.Brushes]::White, $x, 18)
-            $x += $cell + 45
+            $parent = Split-Path -Parent ([System.IO.Path]::GetFullPath($Path))
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+            $sheet.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
         }
-        $parent = Split-Path -Parent ([System.IO.Path]::GetFullPath($Path))
-        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-        $sheet.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+        finally { $graphics.Dispose() }
     }
-    finally {
-        $graphics.Dispose()
-        $sheet.Dispose()
-    }
+    finally { $sheet.Dispose() }
 }
 
 if (-not $VerifyOnly) {
