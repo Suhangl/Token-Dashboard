@@ -1761,6 +1761,58 @@ sealed class TrayIconCache : IDisposable
     }
 }
 
+static class TrayIconSizing
+{
+    const uint MonitorDefaultToNearest = 2;
+
+    [DllImport("user32.dll")]
+    static extern IntPtr MonitorFromPoint(System.Drawing.Point point, uint flags);
+
+    [DllImport("shcore.dll")]
+    static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
+
+    public static int ForDpi(int dpi)
+    {
+        if (dpi <= 0) dpi = 96;
+        int[] supported = new[] { 16, 20, 24, 32 };
+        double scaledPixels = 16.0 * dpi / 96.0;
+        int nearest = supported[0];
+        double nearestDistance = Math.Abs(scaledPixels - nearest);
+        for (int index = 1; index < supported.Length; index++)
+        {
+            double distance = Math.Abs(scaledPixels - supported[index]);
+            if (distance < nearestDistance)
+            {
+                nearest = supported[index];
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    public static int ResolvePixelSize(Func<int> dpiLookup)
+    {
+        int dpi = 96;
+        try
+        {
+            int candidate = dpiLookup == null ? 0 : dpiLookup();
+            if (candidate > 0) dpi = candidate;
+        }
+        catch { }
+        return ForDpi(dpi);
+    }
+
+    public static int DpiAtPoint(System.Drawing.Point point)
+    {
+        IntPtr monitor = MonitorFromPoint(point, MonitorDefaultToNearest);
+        if (monitor == IntPtr.Zero) return 96;
+        uint dpiX, dpiY;
+        return GetDpiForMonitor(monitor, 0, out dpiX, out dpiY) == 0 && dpiX > 0
+            ? (int)dpiX
+            : 96;
+    }
+}
+
 enum TrayEdge
 {
     Top,
@@ -1796,8 +1848,10 @@ class TrayController : IDisposable
     readonly DispatcherTimer _cursorPollTimer;
     readonly TrayIconCache _iconCache;
     readonly Action<DashboardSettings> _saveSettings;
+    readonly Func<System.Drawing.Point, int> _trayDpiLookup;
     System.Windows.Forms.ContextMenu _contextMenu;
     TrayIconVisual _currentVisual;
+    int _currentIconSize;
     bool _hasCurrentVisual;
     bool _disposed;
     bool _cursorOverTray;
@@ -1816,11 +1870,22 @@ class TrayController : IDisposable
         INotifyIconBackend backend,
         PopupWindow popup,
         Action<DashboardSettings> saveSettings)
+        : this(settings, backend, popup, saveSettings, TrayIconSizing.DpiAtPoint)
+    {
+    }
+
+    internal TrayController(
+        DashboardSettings settings,
+        INotifyIconBackend backend,
+        PopupWindow popup,
+        Action<DashboardSettings> saveSettings,
+        Func<System.Drawing.Point, int> trayDpiLookup)
     {
         _settings = settings;
         _backend = backend;
         _popup = popup;
         _saveSettings = saveSettings ?? delegate { };
+        _trayDpiLookup = trayDpiLookup ?? TrayIconSizing.DpiAtPoint;
         _iconCache = new TrayIconCache();
         _cursorOverTray = false;
         bool initializationComplete = false;
@@ -1928,10 +1993,18 @@ class TrayController : IDisposable
     {
         TrayIconVisual next = TrayIconState.Select(
             DashboardSettings.NormalizeTrayIconMode(_settings.trayIconMode), DashboardState.CodexQuota);
-        if (_hasCurrentVisual && _currentVisual.Equals(next)) return;
-        System.Drawing.Icon icon = _iconCache.Get(next, 16);
+        int iconSize = TrayIconSizing.ResolvePixelSize(delegate
+        {
+            System.Drawing.Point point = _hasTrayAnchor
+                ? _lastTrayPoint
+                : System.Windows.Forms.Control.MousePosition;
+            return _trayDpiLookup(point);
+        });
+        if (_hasCurrentVisual && _currentVisual.Equals(next) && _currentIconSize == iconSize) return;
+        System.Drawing.Icon icon = _iconCache.Get(next, iconSize);
         _backend.SetIcon(icon);
         _currentVisual = next;
+        _currentIconSize = iconSize;
         _hasCurrentVisual = true;
     }
 
@@ -1940,6 +2013,7 @@ class TrayController : IDisposable
         _dismissTimer.Stop();
         _lastTrayPoint = System.Windows.Forms.Control.MousePosition;
         _hasTrayAnchor = true;
+        RefreshIcon();
         _cursorOverTray = true;
         if (!_hoverTimer.IsEnabled && !_popup.IsVisible) _hoverTimer.Start();
     }
