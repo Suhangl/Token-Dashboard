@@ -1660,12 +1660,16 @@ static class BitmapFactory
 
     static void DrawPercentage(System.Drawing.Graphics g, int percentage, int size)
     {
-        string text = percentage.ToString(System.Globalization.CultureInfo.InvariantCulture);
         bool exactHundred = percentage == 100;
-        float fontSize = size * (exactHundred ? 0.305f : (percentage >= 10 ? 0.39f : 0.46f));
-        System.Drawing.RectangleF layout = exactHundred
-            ? new System.Drawing.RectangleF(0f, size * 0.30f, size, size * 0.43f)
-            : new System.Drawing.RectangleF(0f, size * 0.27f, size, size * 0.48f);
+        if (exactHundred)
+        {
+            DrawExactHundred(g, size);
+            return;
+        }
+
+        string text = percentage.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        float fontSize = size * (percentage >= 10 ? 0.39f : 0.46f);
+        System.Drawing.RectangleF layout = new System.Drawing.RectangleF(0f, size * 0.27f, size, size * 0.48f);
         using (System.Drawing.Font font = new System.Drawing.Font(
             System.Drawing.FontFamily.GenericSansSerif, fontSize, System.Drawing.FontStyle.Bold,
             System.Drawing.GraphicsUnit.Pixel))
@@ -1683,6 +1687,50 @@ static class BitmapFactory
             g.DrawString(text, font, shadow, shadowLayout, format);
             g.DrawString(text, font, foreground, layout, format);
         }
+    }
+
+    static void DrawExactHundred(System.Drawing.Graphics g, int size)
+    {
+        float scale = size / 16f;
+        System.Drawing.RectangleF[] strokes = new[]
+        {
+            new System.Drawing.RectangleF(3f, 5f, 2f, 1f),
+            new System.Drawing.RectangleF(4f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(3f, 10f, 3f, 1f),
+            new System.Drawing.RectangleF(7f, 5f, 3f, 1f),
+            new System.Drawing.RectangleF(7f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(9f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(7f, 10f, 3f, 1f),
+            new System.Drawing.RectangleF(11f, 5f, 3f, 1f),
+            new System.Drawing.RectangleF(11f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(13f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(11f, 10f, 3f, 1f)
+        };
+        System.Drawing.Drawing2D.SmoothingMode previousSmoothing = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        try
+        {
+            using (System.Drawing.SolidBrush shadow = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(180, 43, 50, 61)))
+            using (System.Drawing.SolidBrush foreground = new System.Drawing.SolidBrush(
+                System.Drawing.Color.FromArgb(255, 148, 156, 168)))
+            {
+                foreach (System.Drawing.RectangleF stroke in strokes)
+                {
+                    System.Drawing.RectangleF scaled = new System.Drawing.RectangleF(
+                        stroke.X * scale, stroke.Y * scale, stroke.Width * scale, stroke.Height * scale);
+                    System.Drawing.RectangleF shadowStroke = scaled;
+                    shadowStroke.Offset(0f, Math.Max(0.6f, scale * 0.5f));
+                    g.FillRectangle(shadow, shadowStroke);
+                }
+                foreach (System.Drawing.RectangleF stroke in strokes)
+                {
+                    g.FillRectangle(foreground, stroke.X * scale, stroke.Y * scale,
+                        stroke.Width * scale, stroke.Height * scale);
+                }
+            }
+        }
+        finally { g.SmoothingMode = previousSmoothing; }
     }
 }
 

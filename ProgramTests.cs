@@ -447,6 +447,22 @@ static class ProgramTests
             TrayIconMode.Percentage, new QuotaSnapshot(true, true, 100, 50, "ok", null, null));
         Expect(percentage100.Kind == TrayIconVisualKind.Percentage && percentage100.Percentage == 100,
             "tray visual preserves exact 100");
+        using (System.Drawing.Icon exactHundredIcon = BitmapFactory.CreateTrayIcon(percentage100, 16))
+        using (System.Drawing.Bitmap exactHundredBitmap = exactHundredIcon.ToBitmap())
+        {
+            System.Drawing.Color firstZeroHole = exactHundredBitmap.GetPixel(8, 7);
+            System.Drawing.Color secondZeroHole = exactHundredBitmap.GetPixel(12, 7);
+            bool opaqueZeroEdges = exactHundredBitmap.GetPixel(7, 7).A > 200
+                && exactHundredBitmap.GetPixel(9, 7).A > 200
+                && exactHundredBitmap.GetPixel(11, 7).A > 200
+                && exactHundredBitmap.GetPixel(13, 7).A > 200;
+            Expect(firstZeroHole.A < 96 && secondZeroHole.A < 96 && opaqueZeroEdges,
+                "exact 100 at 16px keeps two open zero counters");
+            System.Drawing.Color exactHundredEdge = exactHundredBitmap.GetPixel(7, 7);
+            int exactHundredLuminance = (exactHundredEdge.R + exactHundredEdge.G + exactHundredEdge.B) / 3;
+            Expect(exactHundredLuminance >= 110 && exactHundredLuminance <= 185,
+                "exact 100 glyph keeps usable contrast on dark and light taskbars");
+        }
         Expect(percentage72.Equals(new TrayIconVisual(TrayIconVisualKind.Percentage, 72))
             && percentage72.GetHashCode() == new TrayIconVisual(TrayIconVisualKind.Percentage, 72).GetHashCode(),
             "tray visuals are value-equatable");
