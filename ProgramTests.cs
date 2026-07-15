@@ -434,6 +434,9 @@ static class ProgramTests
                 Expect(result.Root != null, "BuildUiFactory " + names[i] + " returns non-null root");
                 Expect(result.Bindings != null, "BuildUiFactory " + names[i] + " returns non-null bindings");
                 Expect(result.Bindings.stickyPinButton != null, "BuildUiFactory " + names[i] + " populates stickyPinButton");
+                Expect(result.Bindings.refreshButton != null
+                    && Convert.ToString(result.Bindings.refreshButton.Content) == "Refresh",
+                    "footer exposes a floating Refresh button");
                 System.Windows.Controls.Border quietShell = result.Root as System.Windows.Controls.Border;
                 Expect(quietShell != null && quietShell.Margin.Left == 8 && quietShell.Margin.Top == 8
                     && quietShell.Margin.Right == 8 && quietShell.Margin.Bottom == 8,
@@ -503,6 +506,8 @@ static class ProgramTests
             pinGrid.RaiseEvent(click);
             Expect(click.Handled, "sticky pin handles click");
             Expect(popup.IsSticky && popup.Topmost, "sticky pin click enters sticky mode");
+            popup.HandleDeactivated();
+            Expect(popup.IsSticky && popup.Topmost, "sticky popup remains pinned and topmost after focus changes");
             Expect((string)System.Windows.Controls.ToolTipService.GetToolTip(pinGrid) == "已钉住（再次点击 📌 取消）", "sticky pin click sets active tooltip");
             WaitForDispatcher(250);
             Expect(pinFill != null && pinFill.Color == System.Windows.Media.Color.FromRgb(230, 230, 230), "sticky pin animates to filled");

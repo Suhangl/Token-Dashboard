@@ -793,7 +793,8 @@ class Bindings
     public TextBlock fivePercent, fiveUsed, weekPercent, weekUsed;
     public TextBlock codexTokenUsage;
     public TextBlock miniFivePercent, miniFiveUsed, miniWeekPercent, miniWeekUsed;
-    public TextBlock deepSeekPercent, deepSeekUsed, footerSub;
+    public TextBlock deepSeekPercent, deepSeekUsed;
+    public System.Windows.Controls.Button refreshButton;
     public System.Windows.Shapes.Ellipse statusDot, statusGlow;
     public System.Windows.Controls.Border fiveFill, fiveTrack, weekFill, weekTrack;
     public System.Windows.Controls.Border miniFiveFill, miniFiveTrack, miniWeekFill, miniWeekTrack;
@@ -902,9 +903,26 @@ static class BuildUiFactory
     static void AppendFooter(Grid grid, Bindings b, int row)
     {
         Grid footer = new Grid();
-        b.footerSub = MakeText("", 10.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal);
-        b.footerSub.HorizontalAlignment = HorizontalAlignment.Right;
-        footer.Children.Add(b.footerSub);
+        b.refreshButton = new System.Windows.Controls.Button
+        {
+            Content = "Refresh",
+            Height = 24,
+            Padding = new Thickness(11, 0, 11, 0),
+            FontSize = 10.5,
+            FontWeight = FontWeights.Medium,
+            Foreground = new SolidColorBrush(QuietGlassPalette.PrimaryText),
+            Background = new SolidColorBrush(Color.FromArgb(36, 255, 255, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(48, 255, 255, 255)),
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            FocusVisualStyle = null,
+            IsTabStop = false,
+            Cursor = Cursors.Hand,
+            ToolTip = "立即刷新"
+        };
+        b.refreshButton.Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 5, ShadowDepth = 1, Opacity = 0.18 };
+        footer.Children.Add(b.refreshButton);
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
         Grid.SetRow(footer, row); grid.Children.Add(footer);
     }
@@ -1118,7 +1136,7 @@ class PopupWindow : Window
 
         SourceInitialized += delegate { EnableSystemGlass(this); };
         Activated += delegate { };
-        Deactivated += delegate { if (_isSticky) LeaveSticky(); };
+        Deactivated += delegate { HandleDeactivated(); };
         Closing += delegate(object s2, CancelEventArgs e)
         {
             if (_isSticky) { e.Cancel = true; Hide(); }
@@ -1168,14 +1186,20 @@ class PopupWindow : Window
         RenderCountdown();
         Render();
         BindToStickyButton();
+        if (Bindings.refreshButton != null) Bindings.refreshButton.Click += delegate { StartRefresh(); };
         StartRefresh();
     }
 
     void RenderCountdown()
     {
-        if (Bindings == null || Bindings.footerSub == null) return;
+        if (Bindings == null || Bindings.refreshButton == null) return;
         int seconds = Math.Max(0, (int)Math.Ceiling((_nextRefreshAt - DateTime.Now).TotalSeconds));
-        Bindings.footerSub.Text = "refresh " + seconds + "s";
+        Bindings.refreshButton.Content = "Refresh " + seconds + "s";
+    }
+
+    internal void HandleDeactivated()
+    {
+        if (_isSticky) Topmost = true;
     }
 
     public void BindToStickyButton()
