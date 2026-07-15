@@ -1098,6 +1098,7 @@ class PopupWindow : Window
         Settings = settings;
         WindowStyle = WindowStyle.None;
         ShowInTaskbar = false;
+        ShowActivated = false;
         WindowStartupLocation = WindowStartupLocation.Manual;
         AllowsTransparency = true;
         Background = Brushes.Transparent;
@@ -1228,6 +1229,21 @@ class PopupWindow : Window
     {
         _isSticky = true;
         Topmost = true;
+    }
+
+    public void SetTransientTopmost(bool visible)
+    {
+        Topmost = ShouldBeTopmost(visible, _isSticky);
+    }
+
+    static bool ShouldBeTopmost(bool visible, bool sticky)
+    {
+        return visible || sticky;
+    }
+
+    internal static bool ShouldBeTopmostForTest(bool visible, bool sticky)
+    {
+        return ShouldBeTopmost(visible, sticky);
     }
 
     public void LeaveSticky()
@@ -1914,7 +1930,11 @@ class TrayController : IDisposable
         _dismissTimer.Tick += delegate
         {
             _dismissTimer.Stop();
-            if (!_popup.IsSticky) _popup.Hide();
+            if (!_popup.IsSticky)
+            {
+                _popup.SetTransientTopmost(false);
+                _popup.Hide();
+            }
         };
 
         // Cursor poll: NotifyIcon has no MouseLeave event; poll Control.MousePosition
@@ -2100,6 +2120,7 @@ class TrayController : IDisposable
         {
             _popup.Left = _settings.popupLeft;
             _popup.Top = _settings.popupTop;
+            _popup.SetTransientTopmost(true);
             _popup.Show();
             return;
         }
@@ -2115,6 +2136,7 @@ class TrayController : IDisposable
         // Keep a visible WPF/DIP fallback in case native positioning is unavailable.
         _popup.Left = SystemParameters.WorkArea.Right - _popup.Width - PopupGap;
         _popup.Top = SystemParameters.WorkArea.Bottom - _popup.Height - PopupGap;
+        _popup.SetTransientTopmost(true);
         _popup.Show();
 
         IntPtr hwnd = new WindowInteropHelper(_popup).Handle;

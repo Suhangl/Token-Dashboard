@@ -268,6 +268,12 @@ static class ProgramTests
             "DeepSeek balance uses the approved soft-violet accent");
         Expect(QuietGlassPalette.UnavailableAllowance == System.Windows.Media.Colors.Black,
             "quiet glass unavailable allowance fill is black");
+        Expect(PopupWindow.ShouldBeTopmostForTest(true, false),
+            "visible hover popup is topmost above a maximized app");
+        Expect(!PopupWindow.ShouldBeTopmostForTest(false, false),
+            "hidden non-sticky popup restores normal z-order");
+        Expect(PopupWindow.ShouldBeTopmostForTest(true, true),
+            "visible sticky popup remains topmost");
         Expect(CodexAppServerQuota.ParseJsonRpcId("not json") == null, "JSON-RPC ignores non-JSON");
         Expect(CodexAppServerQuota.ParseJsonRpcId("{\"id\":1}") == 1, "JSON-RPC id:1 (not target)");
 
@@ -481,6 +487,7 @@ static class ProgramTests
 
         DashboardSettings pinSettings = new DashboardSettings();
         PopupWindow popup = new PopupWindow(pinSettings);
+        Expect(!popup.ShowActivated, "tray popup does not activate or steal focus from the foreground app");
         popup.Show();
         WaitForDispatcher(50);
         System.Windows.Controls.Grid pinGrid = popup.Bindings.stickyPinButton as System.Windows.Controls.Grid;
