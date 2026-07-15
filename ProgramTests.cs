@@ -258,14 +258,14 @@ static class ProgramTests
 
         Expect(PopupWindow.MeterFillWidthForTest(false, 50, 300) == 300,
             "unavailable meter uses a full-width indicator");
-        Expect(PopupWindow.MeterFillColorForTest(false, 50) == System.Windows.Media.Colors.Black,
+        Expect(PopupWindow.MeterFillColorForTest(false, QuietGlassPalette.FiveHourAllowance) == System.Windows.Media.Colors.Black,
             "unavailable meter uses a black indicator");
-        Expect(PopupWindow.MeterFillColorForTest(true, 50) == System.Windows.Media.Color.FromRgb(74, 222, 128),
-            "allowance at 50% uses the original green remaining color");
-        Expect(PopupWindow.MeterFillColorForTest(true, 20) == System.Windows.Media.Color.FromRgb(245, 180, 55),
-            "allowance at 20% uses the original amber remaining color");
-        Expect(PopupWindow.MeterFillColorForTest(true, 19) == System.Windows.Media.Color.FromRgb(236, 83, 83),
-            "allowance below 20% uses the original red remaining color");
+        Expect(PopupWindow.MeterFillColorForTest(true, QuietGlassPalette.FiveHourAllowance) == System.Windows.Media.Color.FromRgb(67, 214, 164),
+            "5H allowance uses the approved mint accent");
+        Expect(PopupWindow.MeterFillColorForTest(true, QuietGlassPalette.WeeklyAllowance) == System.Windows.Media.Color.FromRgb(88, 168, 255),
+            "weekly allowance uses the approved mist-blue accent");
+        Expect(PopupWindow.MeterFillColorForTest(true, QuietGlassPalette.DeepSeekAllowance) == System.Windows.Media.Color.FromRgb(157, 124, 255),
+            "DeepSeek balance uses the approved soft-violet accent");
         Expect(QuietGlassPalette.UnavailableAllowance == System.Windows.Media.Colors.Black,
             "quiet glass unavailable allowance fill is black");
         Expect(CodexAppServerQuota.ParseJsonRpcId("not json") == null, "JSON-RPC ignores non-JSON");

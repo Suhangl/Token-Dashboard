@@ -215,16 +215,6 @@ class HistoryRing
     public int? Current { get { return count > 0 ? buf[(head - 1 + capacity) % capacity].Percent : (int?)null; } }
 }
 
-static class BarColors
-{
-    public static Color ForPercent(int percent)
-    {
-        if (percent >= 50) return Color.FromRgb(74, 222, 128);
-        if (percent >= 20) return Color.FromRgb(245, 180, 55);
-        return Color.FromRgb(236, 83, 83);
-    }
-}
-
 static class QuietGlassPalette
 {
     public static readonly Color ShellTop = Color.FromArgb(232, 34, 36, 40);
@@ -234,7 +224,9 @@ static class QuietGlassPalette
     public static readonly Color Divider = Color.FromArgb(20, 255, 255, 255);
     public static readonly Color Shadow = Colors.Black;
     public static readonly Color Track = Color.FromArgb(92, 72, 76, 82);
-    public static readonly Color AvailableAllowance = Color.FromRgb(198, 201, 204);
+    public static readonly Color FiveHourAllowance = Color.FromRgb(67, 214, 164);
+    public static readonly Color WeeklyAllowance = Color.FromRgb(88, 168, 255);
+    public static readonly Color DeepSeekAllowance = Color.FromRgb(157, 124, 255);
     public static readonly Color UnavailableAllowance = Colors.Black;
     public static readonly Color PrimaryText = Color.FromRgb(232, 234, 236);
     public static readonly Color SecondaryText = Color.FromRgb(145, 149, 154);
@@ -1268,8 +1260,8 @@ class PopupWindow : Window
             Bindings.fiveUsed.Text = quota.FiveHourAvailable
                 ? PresentationText.TMinus(quota.FiveHourResetsAt, DateTime.Now)
                 : "";
-            UpdateMeter(Bindings.fiveFill, Bindings.fiveTrack, quota.FiveHourAvailable, quota.FiveHourRemainingPercent);
-            UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.WeeklyAvailable, quota.WeeklyRemainingPercent);
+            UpdateMeter(Bindings.fiveFill, Bindings.fiveTrack, quota.FiveHourAvailable, quota.FiveHourRemainingPercent, QuietGlassPalette.FiveHourAllowance);
+            UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.WeeklyAvailable, quota.WeeklyRemainingPercent, QuietGlassPalette.WeeklyAllowance);
             Bindings.codexTokenUsage.Text = quota.Available ? "tokens " + FormatTokens(usage.TotalTokens) : "";
         }
         if (Settings.minimax.enabled)
@@ -1278,8 +1270,8 @@ class PopupWindow : Window
             Bindings.miniWeekPercent.Text = minimax.Available ? minimax.WeeklyRemainingPercent + "%" : "--";
             Bindings.miniFiveUsed.Text = PresentationText.MiniMaxTMinus(minimax.RemainsTime);
             Bindings.miniWeekUsed.Text = "";
-            UpdateMeter(Bindings.miniFiveFill, Bindings.miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent);
-            UpdateMeter(Bindings.miniWeekFill, Bindings.miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent);
+            UpdateMeter(Bindings.miniFiveFill, Bindings.miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent, QuietGlassPalette.FiveHourAllowance);
+            UpdateMeter(Bindings.miniWeekFill, Bindings.miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent, QuietGlassPalette.WeeklyAllowance);
             string miniTip = (minimax.IsStale ? "Stale: " : "") + minimax.Status;
             if (!string.IsNullOrEmpty(minimax.RemainsTime)) miniTip += "\n5h: " + minimax.RemainsTime;
             Bindings.miniHeading.ToolTip = miniTip;
@@ -1291,7 +1283,7 @@ class PopupWindow : Window
             int? balancePercent = ProviderMath.RemainingPercent(deepseek.TotalBalance, Settings.deepseek.referenceBudget);
             Bindings.deepSeekPercent.Text = (deepseek.Available && balancePercent.HasValue) ? balancePercent.Value + "%" : "--";
             Bindings.deepSeekUsed.Text = deepseek.Available ? CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
-            UpdateMeter(Bindings.deepSeekFill, Bindings.deepSeekTrack, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault());
+            UpdateMeter(Bindings.deepSeekFill, Bindings.deepSeekTrack, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault(), QuietGlassPalette.DeepSeekAllowance);
             decimal estimatedCost = EstimateCost();
             string estimate = estimatedCost > 0m && deepseek.TotalBalance >= 0m ? "\nAbout " + Math.Floor(deepseek.TotalBalance / estimatedCost).ToString("0") + " configured tasks" : "";
             string deepTip = "Balance: " + CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + CurrencySymbol(deepseek.Currency) + Settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
@@ -1308,24 +1300,37 @@ class PopupWindow : Window
         return ProviderMath.EstimatedCostPerRequest(Settings.deepseek.estimate.averageInputTokens, Settings.deepseek.estimate.averageOutputTokens, Settings.deepseek.estimate.cacheHitRatio, price.inputCacheHit, price.inputCacheMiss, price.output);
     }
 
-    void UpdateMeter(Border fill, Border track, bool available, int remaining)
+    void UpdateMeter(Border fill, Border track, bool available, int remaining, Color availableTone)
     {
         double width = track.ActualWidth;
         if (width <= 0) width = Width - 40;
         if (!available)
         {
-            fill.Background = new SolidColorBrush(MeterFillColor(false, remaining));
+            fill.Effect = null;
+            fill.Background = new SolidColorBrush(MeterFillColor(false, availableTone));
             fill.Width = MeterFillWidth(false, remaining, width);
             return;
         }
 
-        fill.Background = new SolidColorBrush(MeterFillColor(true, remaining));
+        fill.Background = AllowanceBrush(availableTone);
+        fill.Effect = new DropShadowEffect { Color = availableTone, BlurRadius = 6, ShadowDepth = 0, Opacity = 0.28 };
         fill.Width = MeterFillWidth(true, remaining, width);
     }
 
-    static Color MeterFillColor(bool available, int remaining)
+    static LinearGradientBrush AllowanceBrush(Color tone)
     {
-        return available ? BarColors.ForPercent(remaining) : QuietGlassPalette.UnavailableAllowance;
+        Color highlight = Color.FromRgb((byte)Math.Min(255, tone.R + 34), (byte)Math.Min(255, tone.G + 34), (byte)Math.Min(255, tone.B + 34));
+        Color shade = Color.FromRgb((byte)Math.Max(0, tone.R - 16), (byte)Math.Max(0, tone.G - 16), (byte)Math.Max(0, tone.B - 16));
+        return new LinearGradientBrush(new GradientStopCollection {
+            new GradientStop(highlight, 0),
+            new GradientStop(tone, 0.58),
+            new GradientStop(shade, 1)
+        }, new Point(0, 0), new Point(1, 0));
+    }
+
+    static Color MeterFillColor(bool available, Color availableTone)
+    {
+        return available ? availableTone : QuietGlassPalette.UnavailableAllowance;
     }
 
     static double MeterFillWidth(bool available, int remaining, double trackWidth)
@@ -1334,9 +1339,9 @@ class PopupWindow : Window
         return Math.Max(4, trackWidth * Math.Max(0, Math.Min(100, remaining)) / 100.0);
     }
 
-    internal static Color MeterFillColorForTest(bool available, int remaining)
+    internal static Color MeterFillColorForTest(bool available, Color availableTone)
     {
-        return MeterFillColor(available, remaining);
+        return MeterFillColor(available, availableTone);
     }
 
     internal static double MeterFillWidthForTest(bool available, int remaining, double trackWidth)
