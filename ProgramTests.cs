@@ -592,24 +592,24 @@ static class ProgramTests
         Expect(invalidTraySizesRejected == 2,
             "tray renderer rejects sizes outside the bounded 16/20/24/32 set");
 
-        Expect(TrayIconSizing.ForDpi(96) == 16
-            && TrayIconSizing.ForDpi(120) == 20
-            && TrayIconSizing.ForDpi(144) == 24
-            && TrayIconSizing.ForDpi(192) == 32,
-            "tray DPI mapping selects 16/20/24/32 at 100/125/150/200 percent");
-        Expect(TrayIconSizing.ForDpi(108) == 16
-            && TrayIconSizing.ForDpi(109) == 20
-            && TrayIconSizing.ForDpi(132) == 20
-            && TrayIconSizing.ForDpi(133) == 24
-            && TrayIconSizing.ForDpi(168) == 24
-            && TrayIconSizing.ForDpi(169) == 32
-            && TrayIconSizing.ForDpi(48) == 16
-            && TrayIconSizing.ForDpi(384) == 32,
-            "tray DPI mapping clamps intermediate and out-of-range DPI to the nearest supported size");
+        Expect(TrayIconSizing.ForScalePercent(100) == 16
+            && TrayIconSizing.ForScalePercent(125) == 20
+            && TrayIconSizing.ForScalePercent(150) == 24
+            && TrayIconSizing.ForScalePercent(200) == 32,
+            "tray monitor scale mapping selects 16/20/24/32 at 100/125/150/200 percent");
+        Expect(TrayIconSizing.ForScalePercent(112) == 16
+            && TrayIconSizing.ForScalePercent(113) == 20
+            && TrayIconSizing.ForScalePercent(137) == 20
+            && TrayIconSizing.ForScalePercent(138) == 24
+            && TrayIconSizing.ForScalePercent(175) == 24
+            && TrayIconSizing.ForScalePercent(176) == 32
+            && TrayIconSizing.ForScalePercent(50) == 16
+            && TrayIconSizing.ForScalePercent(400) == 32,
+            "tray monitor scale mapping clamps intermediate and out-of-range percentages to the nearest supported size");
         Expect(TrayIconSizing.ResolvePixelSize(delegate { return 0; }) == 16,
-            "invalid monitor DPI safely falls back to 96 DPI");
-        Expect(TrayIconSizing.ResolvePixelSize(delegate { throw new InvalidOperationException("DPI unavailable"); }) == 16,
-            "failed monitor DPI lookup safely falls back to 96 DPI");
+            "invalid monitor scale safely falls back to 100 percent / 16px");
+        Expect(TrayIconSizing.ResolvePixelSize(delegate { throw new InvalidOperationException("scale unavailable"); }) == 16,
+            "failed monitor scale lookup safely falls back to 100 percent / 16px");
 
         DashboardSettings failureSettings = new DashboardSettings
         {
@@ -698,10 +698,10 @@ static class ProgramTests
             "tray integration precondition retains percentage mode and 72 percent quota");
         int showCountBefore = trayFake.ShowCount;
         int setIconCountBefore = trayFake.SetIconCount;
-        int simulatedTrayDpi = 96;
+        int simulatedTrayScalePercent = 100;
         TrayController trayController = new TrayController(
             traySettings, trayFake, trayPopup, delegate(DashboardSettings saved) { traySettingsSaveCount++; },
-            delegate(System.Drawing.Point point) { return simulatedTrayDpi; });
+            delegate(System.Drawing.Point point) { return simulatedTrayScalePercent; });
         WaitForDispatcher(20);
         Expect(trayFake.ShowCount == showCountBefore + 1, "TrayController construction calls backend.Show exactly once");
         Expect(trayFake.SetIconCount == setIconCountBefore + 1, "TrayController construction calls backend.SetIcon exactly once");
@@ -724,19 +724,19 @@ static class ProgramTests
         Expect(object.ReferenceEquals(initialBorrowedIcon, trayFake.CurrentIcon),
             "same derived tray visual reuses the currently borrowed icon");
         Expect(initialBorrowedIcon != null && initialBorrowedIcon.Width == 16,
-            "initial 96-DPI tray monitor borrows the 16px icon");
+            "initial 100-percent tray monitor borrows the 16px icon");
 
-        int replacementsBeforeDpiChange = trayFake.SetIconCount;
-        simulatedTrayDpi = 120;
+        int replacementsBeforeScaleChange = trayFake.SetIconCount;
+        simulatedTrayScalePercent = 125;
         trayFake.RaiseMouseMove();
-        Expect(trayFake.SetIconCount == replacementsBeforeDpiChange + 1
+        Expect(trayFake.SetIconCount == replacementsBeforeScaleChange + 1
             && trayFake.CurrentIcon != null && trayFake.CurrentIcon.Width == 20,
             "same visual on a 125-percent tray monitor replaces the backend icon with 20px");
-        System.Drawing.Icon dpi20Icon = trayFake.CurrentIcon;
+        System.Drawing.Icon scale20Icon = trayFake.CurrentIcon;
         trayFake.RaiseMouseMove();
-        Expect(trayFake.SetIconCount == replacementsBeforeDpiChange + 1
-            && object.ReferenceEquals(dpi20Icon, trayFake.CurrentIcon),
-            "repeated mouse movement at the same tray DPI stabilizes without replacement");
+        Expect(trayFake.SetIconCount == replacementsBeforeScaleChange + 1
+            && object.ReferenceEquals(scale20Icon, trayFake.CurrentIcon),
+            "repeated mouse movement at the same tray monitor scale stabilizes without replacement");
         setIconCountBefore++;
 
         DashboardState.CodexQuota = new QuotaSnapshot(true, true, 71, 12, "changed 5h", null, null);

@@ -1769,13 +1769,13 @@ static class TrayIconSizing
     static extern IntPtr MonitorFromPoint(System.Drawing.Point point, uint flags);
 
     [DllImport("shcore.dll")]
-    static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
+    static extern int GetScaleFactorForMonitor(IntPtr monitor, out int scalePercent);
 
-    public static int ForDpi(int dpi)
+    public static int ForScalePercent(int scalePercent)
     {
-        if (dpi <= 0) dpi = 96;
+        if (scalePercent <= 0) scalePercent = 100;
         int[] supported = new[] { 16, 20, 24, 32 };
-        double scaledPixels = 16.0 * dpi / 96.0;
+        double scaledPixels = 16.0 * scalePercent / 100.0;
         int nearest = supported[0];
         double nearestDistance = Math.Abs(scaledPixels - nearest);
         for (int index = 1; index < supported.Length; index++)
@@ -1790,26 +1790,26 @@ static class TrayIconSizing
         return nearest;
     }
 
-    public static int ResolvePixelSize(Func<int> dpiLookup)
+    public static int ResolvePixelSize(Func<int> scaleLookup)
     {
-        int dpi = 96;
+        int scalePercent = 100;
         try
         {
-            int candidate = dpiLookup == null ? 0 : dpiLookup();
-            if (candidate > 0) dpi = candidate;
+            int candidate = scaleLookup == null ? 0 : scaleLookup();
+            if (candidate > 0) scalePercent = candidate;
         }
         catch { }
-        return ForDpi(dpi);
+        return ForScalePercent(scalePercent);
     }
 
-    public static int DpiAtPoint(System.Drawing.Point point)
+    public static int ScalePercentAtPoint(System.Drawing.Point point)
     {
         IntPtr monitor = MonitorFromPoint(point, MonitorDefaultToNearest);
-        if (monitor == IntPtr.Zero) return 96;
-        uint dpiX, dpiY;
-        return GetDpiForMonitor(monitor, 0, out dpiX, out dpiY) == 0 && dpiX > 0
-            ? (int)dpiX
-            : 96;
+        if (monitor == IntPtr.Zero) return 100;
+        int scalePercent;
+        return GetScaleFactorForMonitor(monitor, out scalePercent) == 0 && scalePercent > 0
+            ? scalePercent
+            : 100;
     }
 }
 
@@ -1848,7 +1848,7 @@ class TrayController : IDisposable
     readonly DispatcherTimer _cursorPollTimer;
     readonly TrayIconCache _iconCache;
     readonly Action<DashboardSettings> _saveSettings;
-    readonly Func<System.Drawing.Point, int> _trayDpiLookup;
+    readonly Func<System.Drawing.Point, int> _trayScaleLookup;
     System.Windows.Forms.ContextMenu _contextMenu;
     TrayIconVisual _currentVisual;
     int _currentIconSize;
@@ -1870,7 +1870,7 @@ class TrayController : IDisposable
         INotifyIconBackend backend,
         PopupWindow popup,
         Action<DashboardSettings> saveSettings)
-        : this(settings, backend, popup, saveSettings, TrayIconSizing.DpiAtPoint)
+        : this(settings, backend, popup, saveSettings, TrayIconSizing.ScalePercentAtPoint)
     {
     }
 
@@ -1879,13 +1879,13 @@ class TrayController : IDisposable
         INotifyIconBackend backend,
         PopupWindow popup,
         Action<DashboardSettings> saveSettings,
-        Func<System.Drawing.Point, int> trayDpiLookup)
+        Func<System.Drawing.Point, int> trayScaleLookup)
     {
         _settings = settings;
         _backend = backend;
         _popup = popup;
         _saveSettings = saveSettings ?? delegate { };
-        _trayDpiLookup = trayDpiLookup ?? TrayIconSizing.DpiAtPoint;
+        _trayScaleLookup = trayScaleLookup ?? TrayIconSizing.ScalePercentAtPoint;
         _iconCache = new TrayIconCache();
         _cursorOverTray = false;
         bool initializationComplete = false;
@@ -1998,7 +1998,7 @@ class TrayController : IDisposable
             System.Drawing.Point point = _hasTrayAnchor
                 ? _lastTrayPoint
                 : System.Windows.Forms.Control.MousePosition;
-            return _trayDpiLookup(point);
+            return _trayScaleLookup(point);
         });
         if (_hasCurrentVisual && _currentVisual.Equals(next) && _currentIconSize == iconSize) return;
         System.Drawing.Icon icon = _iconCache.Get(next, iconSize);
