@@ -215,6 +215,16 @@ class HistoryRing
     public int? Current { get { return count > 0 ? buf[(head - 1 + capacity) % capacity].Percent : (int?)null; } }
 }
 
+static class BarColors
+{
+    public static Color ForPercent(int percent)
+    {
+        if (percent >= 50) return Color.FromRgb(74, 222, 128);
+        if (percent >= 20) return Color.FromRgb(245, 180, 55);
+        return Color.FromRgb(236, 83, 83);
+    }
+}
+
 static class QuietGlassPalette
 {
     public static readonly Color ShellTop = Color.FromArgb(232, 34, 36, 40);
@@ -1315,7 +1325,7 @@ class PopupWindow : Window
 
     static Color MeterFillColor(bool available, int remaining)
     {
-        return available ? QuietGlassPalette.AvailableAllowance : QuietGlassPalette.UnavailableAllowance;
+        return available ? BarColors.ForPercent(remaining) : QuietGlassPalette.UnavailableAllowance;
     }
 
     static double MeterFillWidth(bool available, int remaining, double trackWidth)
