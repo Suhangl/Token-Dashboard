@@ -360,6 +360,7 @@ static class ProgramTests
         Expect(fresh.popupHoverDelayMs == 400, "popupHoverDelayMs default 400");
         Expect(double.IsNaN(fresh.popupLeft) && double.IsNaN(fresh.popupTop), "popupLeft/Top default NaN");
         Expect(!fresh.popupStickyOnLaunch, "popupStickyOnLaunch default false");
+        Expect(!fresh.launchAtLogin, "launchAtLogin default false");
 
         // --- Quiet glass presentation settings ---
         Expect(fresh.trayIconMode == "default", "trayIconMode defaults to default");
@@ -380,7 +381,11 @@ static class ProgramTests
         Expect(loaded != null, "legacy settings.json deserializes without exception");
         Expect(loaded.popupDismissDelayMs == 300, "legacy load falls back to default popupDismissDelayMs");
         Expect(!loaded.popupStickyOnLaunch, "legacy load falls back to default popupStickyOnLaunch");
+        Expect(!loaded.launchAtLogin, "legacy load falls back to default launchAtLogin");
         Expect(loaded.trayIconMode == "default", "legacy load falls back to default trayIconMode");
+
+        Expect(StartupRegistration.CommandForTest(@"C:\Tools\CodexDashboard.exe") == "\"C:\\Tools\\CodexDashboard.exe\"",
+            "startup registration quotes the dashboard executable path");
 
         DashboardSettings trayModeSettings = new DashboardSettings();
         trayModeSettings.trayIconMode = "percentage";
@@ -405,11 +410,13 @@ static class ProgramTests
         // --- Settings round-trip preserves popupLeft/Top + sticky + timings (Task 3) ---
         DashboardSettings popupSettings = new DashboardSettings();
         popupSettings.popupLeft = 123.5; popupSettings.popupTop = 678.9; popupSettings.popupStickyOnLaunch = true;
+        popupSettings.launchAtLogin = true;
         popupSettings.popupDismissDelayMs = 250; popupSettings.popupHoverDelayMs = 350;
         string popupJson = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(popupSettings);
         DashboardSettings popupBack = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<DashboardSettings>(popupJson);
         Expect(popupBack.popupLeft == 123.5 && popupBack.popupTop == 678.9, "popupLeft/Top round-trip");
         Expect(popupBack.popupStickyOnLaunch, "popupStickyOnLaunch round-trip");
+        Expect(popupBack.launchAtLogin, "launchAtLogin round-trip");
         Expect(popupBack.popupDismissDelayMs == 250 && popupBack.popupHoverDelayMs == 350, "popup timings round-trip");
 
         // --- BuildUiFactory exact layout contract for every provider mix ---

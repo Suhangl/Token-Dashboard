@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using Microsoft.Win32;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -299,6 +300,7 @@ class ActiveSettings
     public int popupHoverDelayMs;
     public double popupLeft, popupTop;
     public bool popupStickyOnLaunch;
+    public bool launchAtLogin;
     public string trayIconMode;
 }
 class DashboardSettings
@@ -314,6 +316,7 @@ class DashboardSettings
     public int popupHoverDelayMs = 400;
     public double popupLeft = double.NaN, popupTop = double.NaN;
     public bool popupStickyOnLaunch = false;
+    public bool launchAtLogin = false;
     public string trayIconMode = "default";
     static string FilePath { get { return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CodexDashboard", "settings.json"); } }
     public static DashboardSettings Load()
@@ -366,11 +369,39 @@ class DashboardSettings
             popupLeft = popupLeft,
             popupTop = popupTop,
             popupStickyOnLaunch = popupStickyOnLaunch,
+            launchAtLogin = launchAtLogin,
             trayIconMode = trayIconMode
         };
         File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(active), Encoding.UTF8);
     }
     public static string PathForDisplay { get { return FilePath; } }
+}
+
+static class StartupRegistration
+{
+    const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    const string ValueName = "CodexDashboard";
+
+    public static void Apply(bool enabled)
+    {
+        using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKeyPath, true))
+        {
+            if (key == null) throw new InvalidOperationException("无法打开当前用户的启动项注册表位置。");
+            if (enabled) key.SetValue(ValueName, CommandFor(Process.GetCurrentProcess().MainModule.FileName), RegistryValueKind.String);
+            else key.DeleteValue(ValueName, false);
+        }
+    }
+
+    static string CommandFor(string executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath)) throw new ArgumentException("启动程序路径不能为空。", "executablePath");
+        return "\"" + executablePath.Replace("\"", "") + "\"";
+    }
+
+    internal static string CommandForTest(string executablePath)
+    {
+        return CommandFor(executablePath);
+    }
 }
 
 static class DashboardState
@@ -1574,6 +1605,9 @@ static class SettingsDialog
         ScrollViewer scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         StackPanel panel = new StackPanel { Margin = new Thickness(20) }; scroll.Content = panel; dialog.Content = scroll;
 
+        panel.Children.Add(Section("常规"));
+        CheckBox launchAtLogin = Check("开机自动启动 Dashboard", candidate.launchAtLogin); panel.Children.Add(launchAtLogin);
+
         // ===== CODEX =====
         panel.Children.Add(Section("Codex"));
         CheckBox codexEnabled = Check("显示 Codex 用量（本地 SQLite + app-server）", candidate.codex.enabled); panel.Children.Add(codexEnabled);
@@ -1613,8 +1647,15 @@ static class SettingsDialog
             candidate.codex.enabled = codexEnabled.IsChecked == true;
             candidate.minimax.enabled = miniEnabled.IsChecked == true; candidate.minimax.mmxPath = mmxPath.Text.Trim(); candidate.minimax.quotaModelName = miniModel.Text.Trim();
             candidate.deepseek.enabled = deepEnabled.IsChecked == true; candidate.deepseek.balanceMode = DashboardSettings.NormalizeBalanceMode(Convert.ToString(mode.SelectedItem)); candidate.deepseek.currency = Convert.ToString(currency.SelectedItem); candidate.deepseek.manualBalance = manualValue; candidate.deepseek.referenceBudget = budgetValue;
-            try { candidate.Save(); } catch { MessageBox.Show(dialog, "设置保存失败，请检查磁盘权限。", "设置", MessageBoxButton.OK, MessageBoxImage.Error); return; }
-            settings.codex.enabled = candidate.codex.enabled; settings.minimax.enabled = candidate.minimax.enabled; settings.minimax.mmxPath = candidate.minimax.mmxPath; settings.minimax.quotaModelName = candidate.minimax.quotaModelName; settings.deepseek.enabled = candidate.deepseek.enabled; settings.deepseek.balanceMode = candidate.deepseek.balanceMode; settings.deepseek.currency = candidate.deepseek.currency; settings.deepseek.manualBalance = candidate.deepseek.manualBalance; settings.deepseek.referenceBudget = candidate.deepseek.referenceBudget; dialog.Close();
+            bool previousLaunchAtLogin = settings.launchAtLogin;
+            candidate.launchAtLogin = launchAtLogin.IsChecked == true;
+            try { StartupRegistration.Apply(candidate.launchAtLogin); candidate.Save(); }
+            catch
+            {
+                try { StartupRegistration.Apply(previousLaunchAtLogin); } catch { }
+                MessageBox.Show(dialog, "设置或开机启动项保存失败，请检查当前用户权限。", "设置", MessageBoxButton.OK, MessageBoxImage.Error); return;
+            }
+            settings.codex.enabled = candidate.codex.enabled; settings.minimax.enabled = candidate.minimax.enabled; settings.minimax.mmxPath = candidate.minimax.mmxPath; settings.minimax.quotaModelName = candidate.minimax.quotaModelName; settings.deepseek.enabled = candidate.deepseek.enabled; settings.deepseek.balanceMode = candidate.deepseek.balanceMode; settings.deepseek.currency = candidate.deepseek.currency; settings.deepseek.manualBalance = candidate.deepseek.manualBalance; settings.deepseek.referenceBudget = candidate.deepseek.referenceBudget; settings.launchAtLogin = candidate.launchAtLogin; dialog.Close();
         };
         buttons.Children.Add(cancel); buttons.Children.Add(save); panel.Children.Add(buttons); dialog.ShowDialog();
     }
