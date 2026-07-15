@@ -435,8 +435,10 @@ static class ProgramTests
                 Expect(result.Bindings != null, "BuildUiFactory " + names[i] + " returns non-null bindings");
                 Expect(result.Bindings.stickyPinButton != null, "BuildUiFactory " + names[i] + " populates stickyPinButton");
                 Expect(result.Bindings.refreshButton != null
-                    && Convert.ToString(result.Bindings.refreshButton.Content) == "Refresh",
-                    "footer exposes a floating Refresh button");
+                    && Convert.ToString(result.Bindings.refreshButton.Content) == "Refresh"
+                    && Math.Abs(result.Bindings.refreshButton.Width - 96) < 0.01
+                    && result.Bindings.refreshButton.Template != null,
+                    "footer exposes a fixed-width rounded Refresh button");
                 System.Windows.Controls.Border quietShell = result.Root as System.Windows.Controls.Border;
                 Expect(quietShell != null && quietShell.Margin.Left == 8 && quietShell.Margin.Top == 8
                     && quietShell.Margin.Right == 8 && quietShell.Margin.Bottom == 8,

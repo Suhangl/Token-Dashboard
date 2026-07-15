@@ -906,8 +906,9 @@ static class BuildUiFactory
         b.refreshButton = new System.Windows.Controls.Button
         {
             Content = "Refresh",
-            Height = 24,
-            Padding = new Thickness(11, 0, 11, 0),
+            Width = 96,
+            Height = 25,
+            Padding = new Thickness(0),
             FontSize = 10.5,
             FontWeight = FontWeights.Medium,
             Foreground = new SolidColorBrush(QuietGlassPalette.PrimaryText),
@@ -919,12 +920,33 @@ static class BuildUiFactory
             FocusVisualStyle = null,
             IsTabStop = false,
             Cursor = Cursors.Hand,
-            ToolTip = "立即刷新"
+            ToolTip = "立即刷新",
+            Template = MakeRefreshButtonTemplate()
         };
         b.refreshButton.Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 5, ShadowDepth = 1, Opacity = 0.18 };
         footer.Children.Add(b.refreshButton);
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
         Grid.SetRow(footer, row); grid.Children.Add(footer);
+    }
+
+    static ControlTemplate MakeRefreshButtonTemplate()
+    {
+        FrameworkElementFactory shell = new FrameworkElementFactory(typeof(Border));
+        shell.SetValue(Border.CornerRadiusProperty, new CornerRadius(13));
+        shell.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromArgb(46, 255, 255, 255)));
+        shell.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromArgb(62, 255, 255, 255)));
+        shell.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+
+        FrameworkElementFactory content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(ContentPresenter.ContentSourceProperty, "Content");
+        content.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+        shell.AppendChild(content);
+
+        ControlTemplate template = new ControlTemplate(typeof(System.Windows.Controls.Button));
+        template.VisualTree = shell;
+        return template;
     }
 
     internal static TextBlock MakeText(string text, double size, byte a, byte r, byte g, byte bl, FontWeight weight)
