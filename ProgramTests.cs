@@ -105,6 +105,93 @@ static class ProgramTests
             return GetGuiResources(process.Handle, 0);
     }
 
+    static System.Drawing.Rectangle NonTransparentBounds(System.Drawing.Bitmap bitmap, int alphaThreshold)
+    {
+        int minX = bitmap.Width;
+        int minY = bitmap.Height;
+        int maxX = -1;
+        int maxY = -1;
+        for (int y = 0; y < bitmap.Height; y++)
+        for (int x = 0; x < bitmap.Width; x++)
+        {
+            if (bitmap.GetPixel(x, y).A < alphaThreshold) continue;
+            minX = Math.Min(minX, x);
+            minY = Math.Min(minY, y);
+            maxX = Math.Max(maxX, x);
+            maxY = Math.Max(maxY, y);
+        }
+        return maxX < minX ? System.Drawing.Rectangle.Empty
+            : System.Drawing.Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
+    }
+
+    static int CountOpaqueHighContrastPixels(
+        System.Drawing.Bitmap bitmap, int backgroundLuminance, int alphaThreshold, double requiredContrast)
+    {
+        int count = 0;
+        for (int y = 0; y < bitmap.Height; y++)
+        for (int x = 0; x < bitmap.Width; x++)
+        {
+            System.Drawing.Color pixel = bitmap.GetPixel(x, y);
+            if (pixel.A < alphaThreshold) continue;
+            double foregroundLuminance = (pixel.R + pixel.G + pixel.B) / 3.0;
+            double composited = (foregroundLuminance * pixel.A
+                + backgroundLuminance * (255 - pixel.A)) / 255.0;
+            if (Math.Abs(composited - backgroundLuminance) >= requiredContrast) count++;
+        }
+        return count;
+    }
+
+    static int MaximumOpaqueSaturation(System.Drawing.Bitmap bitmap, int alphaThreshold)
+    {
+        int maximum = 0;
+        for (int y = 0; y < bitmap.Height; y++)
+        for (int x = 0; x < bitmap.Width; x++)
+        {
+            System.Drawing.Color pixel = bitmap.GetPixel(x, y);
+            if (pixel.A < alphaThreshold) continue;
+            int high = Math.Max(pixel.R, Math.Max(pixel.G, pixel.B));
+            int low = Math.Min(pixel.R, Math.Min(pixel.G, pixel.B));
+            maximum = Math.Max(maximum, high - low);
+        }
+        return maximum;
+    }
+
+    static int CountEnclosedTransparentRegions(System.Drawing.Bitmap bitmap, int alphaThreshold)
+    {
+        bool[,] visited = new bool[bitmap.Width, bitmap.Height];
+        int enclosed = 0;
+        int[] dx = new[] { -1, 1, 0, 0 };
+        int[] dy = new[] { 0, 0, -1, 1 };
+        for (int startY = 0; startY < bitmap.Height; startY++)
+        for (int startX = 0; startX < bitmap.Width; startX++)
+        {
+            if (visited[startX, startY] || bitmap.GetPixel(startX, startY).A >= alphaThreshold) continue;
+            System.Collections.Generic.Queue<System.Drawing.Point> queue =
+                new System.Collections.Generic.Queue<System.Drawing.Point>();
+            queue.Enqueue(new System.Drawing.Point(startX, startY));
+            visited[startX, startY] = true;
+            bool touchesEdge = false;
+            while (queue.Count > 0)
+            {
+                System.Drawing.Point point = queue.Dequeue();
+                if (point.X == 0 || point.Y == 0
+                    || point.X == bitmap.Width - 1 || point.Y == bitmap.Height - 1)
+                    touchesEdge = true;
+                for (int direction = 0; direction < 4; direction++)
+                {
+                    int nextX = point.X + dx[direction];
+                    int nextY = point.Y + dy[direction];
+                    if (nextX < 0 || nextY < 0 || nextX >= bitmap.Width || nextY >= bitmap.Height) continue;
+                    if (visited[nextX, nextY] || bitmap.GetPixel(nextX, nextY).A >= alphaThreshold) continue;
+                    visited[nextX, nextY] = true;
+                    queue.Enqueue(new System.Drawing.Point(nextX, nextY));
+                }
+            }
+            if (!touchesEdge) enclosed++;
+        }
+        return enclosed;
+    }
+
     [STAThread]
     static void Main()
     {
@@ -447,21 +534,38 @@ static class ProgramTests
             TrayIconMode.Percentage, new QuotaSnapshot(true, true, 100, 50, "ok", null, null));
         Expect(percentage100.Kind == TrayIconVisualKind.Percentage && percentage100.Percentage == 100,
             "tray visual preserves exact 100");
-        using (System.Drawing.Icon exactHundredIcon = BitmapFactory.CreateTrayIcon(percentage100, 16))
-        using (System.Drawing.Bitmap exactHundredBitmap = exactHundredIcon.ToBitmap())
+        TrayIconVisual[] reviewVisuals = new[]
         {
-            System.Drawing.Color firstZeroHole = exactHundredBitmap.GetPixel(8, 7);
-            System.Drawing.Color secondZeroHole = exactHundredBitmap.GetPixel(12, 7);
-            bool opaqueZeroEdges = exactHundredBitmap.GetPixel(7, 7).A > 200
-                && exactHundredBitmap.GetPixel(9, 7).A > 200
-                && exactHundredBitmap.GetPixel(11, 7).A > 200
-                && exactHundredBitmap.GetPixel(13, 7).A > 200;
-            Expect(firstZeroHole.A < 96 && secondZeroHole.A < 96 && opaqueZeroEdges,
-                "exact 100 at 16px keeps two open zero counters");
-            System.Drawing.Color exactHundredEdge = exactHundredBitmap.GetPixel(7, 7);
-            int exactHundredLuminance = (exactHundredEdge.R + exactHundredEdge.G + exactHundredEdge.B) / 3;
-            Expect(exactHundredLuminance >= 110 && exactHundredLuminance <= 185,
-                "exact 100 glyph keeps usable contrast on dark and light taskbars");
+            defaultVisual,
+            new TrayIconVisual(TrayIconVisualKind.Percentage, 0),
+            new TrayIconVisual(TrayIconVisualKind.Percentage, 68),
+            new TrayIconVisual(TrayIconVisualKind.Percentage, 99),
+            percentage100
+        };
+        string[] reviewLabels = new[] { "default", "0", "68", "99", "100" };
+        for (int reviewIndex = 0; reviewIndex < reviewVisuals.Length; reviewIndex++)
+        {
+            using (System.Drawing.Icon reviewIcon = BitmapFactory.CreateTrayIcon(reviewVisuals[reviewIndex], 16))
+            using (System.Drawing.Bitmap reviewBitmap = reviewIcon.ToBitmap())
+            {
+                System.Drawing.Rectangle bounds = NonTransparentBounds(reviewBitmap, 200);
+                Expect(!bounds.IsEmpty && bounds.Left > 0 && bounds.Top > 0
+                    && bounds.Right < reviewBitmap.Width && bounds.Bottom < reviewBitmap.Height,
+                    reviewLabels[reviewIndex] + " tray icon remains inside its 16px canvas");
+                int darkContrastPixels = CountOpaqueHighContrastPixels(reviewBitmap, 31, 200, 80);
+                int lightContrastPixels = CountOpaqueHighContrastPixels(reviewBitmap, 235, 200, 80);
+                Expect(darkContrastPixels >= 16,
+                    reviewLabels[reviewIndex] + " tray icon has a discernible light contour on a dark taskbar ("
+                    + darkContrastPixels + ")");
+                Expect(lightContrastPixels >= 16,
+                    reviewLabels[reviewIndex] + " tray icon has a discernible dark contour on a light taskbar ("
+                    + lightContrastPixels + ")");
+                Expect(MaximumOpaqueSaturation(reviewBitmap, 200) <= 30,
+                    reviewLabels[reviewIndex] + " tray icon stays low-saturation");
+                if (reviewVisuals[reviewIndex].Percentage == 100)
+                    Expect(CountEnclosedTransparentRegions(reviewBitmap, 96) == 2,
+                        "exact 100 at 16px contains two enclosed transparent counters");
+            }
         }
         Expect(percentage72.Equals(new TrayIconVisual(TrayIconVisualKind.Percentage, 72))
             && percentage72.GetHashCode() == new TrayIconVisual(TrayIconVisualKind.Percentage, 72).GetHashCode(),

@@ -1592,6 +1592,11 @@ class TrayIconBackend : INotifyIconBackend
 
 static class BitmapFactory
 {
+    static readonly System.Drawing.Color TrayGlyphForeground =
+        System.Drawing.Color.FromArgb(255, 221, 226, 234);
+    static readonly System.Drawing.Color TrayGlyphShadow =
+        System.Drawing.Color.FromArgb(255, 43, 50, 61);
+
     [DllImport("user32.dll", SetLastError = true)]
     static extern bool DestroyIcon(IntPtr handle);
 
@@ -1624,14 +1629,14 @@ static class BitmapFactory
     static void DrawOpenGauge(System.Drawing.Graphics g, TrayIconVisual visual, int size)
     {
         float scale = size / 16f;
-        float inset = Math.Max(1.5f, 2.0f * scale);
+        float inset = Math.Max(1.5f, 2.5f * scale);
         float stroke = Math.Max(1.25f, 1.55f * scale);
         System.Drawing.RectangleF ring = new System.Drawing.RectangleF(
             inset, inset, size - inset * 2f, size - inset * 2f);
         using (System.Drawing.Pen shadow = new System.Drawing.Pen(
-            System.Drawing.Color.FromArgb(150, 43, 50, 61), stroke + Math.Max(0.7f, 0.75f * scale)))
+            TrayGlyphShadow, stroke + Math.Max(0.7f, 0.75f * scale)))
         using (System.Drawing.Pen foreground = new System.Drawing.Pen(
-            System.Drawing.Color.FromArgb(245, 221, 226, 234), stroke))
+            TrayGlyphForeground, stroke))
         {
             shadow.StartCap = shadow.EndCap = System.Drawing.Drawing2D.LineCap.Round;
             foreground.StartCap = foreground.EndCap = System.Drawing.Drawing2D.LineCap.Round;
@@ -1645,10 +1650,9 @@ static class BitmapFactory
             return;
         }
 
-        using (System.Drawing.SolidBrush indicator = new System.Drawing.SolidBrush(
-            System.Drawing.Color.FromArgb(245, 221, 226, 234)))
+        using (System.Drawing.SolidBrush indicator = new System.Drawing.SolidBrush(TrayGlyphForeground))
         using (System.Drawing.Pen indicatorShadow = new System.Drawing.Pen(
-            System.Drawing.Color.FromArgb(150, 43, 50, 61), Math.Max(0.8f, scale)))
+            TrayGlyphShadow, Math.Max(0.8f, scale)))
         {
             float cx = size / 2f;
             float cy = size / 2f;
@@ -1674,10 +1678,8 @@ static class BitmapFactory
             System.Drawing.FontFamily.GenericSansSerif, fontSize, System.Drawing.FontStyle.Bold,
             System.Drawing.GraphicsUnit.Pixel))
         using (System.Drawing.StringFormat format = new System.Drawing.StringFormat())
-        using (System.Drawing.SolidBrush shadow = new System.Drawing.SolidBrush(
-            System.Drawing.Color.FromArgb(180, 43, 50, 61)))
-        using (System.Drawing.SolidBrush foreground = new System.Drawing.SolidBrush(
-            System.Drawing.Color.FromArgb(255, 229, 233, 239)))
+        using (System.Drawing.SolidBrush shadow = new System.Drawing.SolidBrush(TrayGlyphShadow))
+        using (System.Drawing.SolidBrush foreground = new System.Drawing.SolidBrush(TrayGlyphForeground))
         {
             format.Alignment = System.Drawing.StringAlignment.Center;
             format.LineAlignment = System.Drawing.StringAlignment.Center;
@@ -1710,10 +1712,8 @@ static class BitmapFactory
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
         try
         {
-            using (System.Drawing.SolidBrush shadow = new System.Drawing.SolidBrush(
-                System.Drawing.Color.FromArgb(180, 43, 50, 61)))
-            using (System.Drawing.SolidBrush foreground = new System.Drawing.SolidBrush(
-                System.Drawing.Color.FromArgb(255, 148, 156, 168)))
+            using (System.Drawing.SolidBrush shadow = new System.Drawing.SolidBrush(TrayGlyphShadow))
+            using (System.Drawing.SolidBrush foreground = new System.Drawing.SolidBrush(TrayGlyphForeground))
             {
                 foreach (System.Drawing.RectangleF stroke in strokes)
                 {
