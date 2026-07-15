@@ -25,3 +25,6 @@ if ($LASTEXITCODE -ne 0) {
     throw "ProviderTests failed"
 }
 Write-Host $result
+
+& powershell -NoProfile -ExecutionPolicy Bypass -File "$root\tools\TestGenerateAppIcon.ps1"
+if ($LASTEXITCODE -ne 0) { throw "Application icon evidence tests failed" }

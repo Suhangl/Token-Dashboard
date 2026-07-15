@@ -217,7 +217,12 @@ function Test-QuietGlassIco {
 }
 
 function Render-IconFrame {
-    param([int]$Size, [int]$Cell)
+    param(
+        [int]$Size,
+        [int]$Cell,
+        [ValidateSet("Dark", "Light")]
+        [string]$Theme
+    )
 
     $tile = New-Object System.Drawing.Bitmap($Cell, $Cell)
     try {
@@ -225,13 +230,23 @@ function Render-IconFrame {
         try {
             $tileGraphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
             $tileGraphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
-            $darkTile = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 61, 61, 61))
+            $firstColor = if ($Theme -eq "Dark") {
+                [System.Drawing.Color]::FromArgb(255, 31, 31, 31)
+            } else {
+                [System.Drawing.Color]::FromArgb(255, 235, 235, 235)
+            }
+            $secondColor = if ($Theme -eq "Dark") {
+                [System.Drawing.Color]::FromArgb(255, 47, 47, 47)
+            } else {
+                [System.Drawing.Color]::FromArgb(255, 219, 219, 219)
+            }
+            $firstTile = New-Object System.Drawing.SolidBrush($firstColor)
             try {
-                $lightTile = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 78, 78, 78))
+                $secondTile = New-Object System.Drawing.SolidBrush($secondColor)
                 try {
                     for ($cy = 0; $cy -lt $Cell; $cy += 16) {
                         for ($cx = 0; $cx -lt $Cell; $cx += 16) {
-                            $brush = if ((($cx / 16) + ($cy / 16)) % 2 -eq 0) { $darkTile } else { $lightTile }
+                            $brush = if ((($cx / 16) + ($cy / 16)) % 2 -eq 0) { $firstTile } else { $secondTile }
                             $tileGraphics.FillRectangle($brush, $cx, $cy, 16, 16)
                         }
                     }
@@ -243,9 +258,9 @@ function Render-IconFrame {
                     }
                     finally { $pngStream.Dispose() }
                 }
-                finally { $lightTile.Dispose() }
+                finally { $secondTile.Dispose() }
             }
-            finally { $darkTile.Dispose() }
+            finally { $firstTile.Dispose() }
         }
         finally { $tileGraphics.Dispose() }
         return $tile
@@ -259,24 +274,33 @@ function Render-IconFrame {
 function Write-ContactSheet {
     param([string]$Path)
 
-    $sheet = New-Object System.Drawing.Bitmap(760, 340, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $sheet = New-Object System.Drawing.Bitmap(760, 650, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     try {
         $graphics = [System.Drawing.Graphics]::FromImage($sheet)
         try {
             $graphics.Clear([System.Drawing.Color]::FromArgb(255, 25, 31, 39))
             $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
             $samples = @(16, 32, 256)
-            $x = 30
-            foreach ($size in $samples) {
-                $cell = if ($size -eq 256) { 256 } else { 128 }
-                $tile = Render-IconFrame -Size $size -Cell $cell
-                try {
-                    $graphics.DrawImage($tile, $x, 48, $cell, $cell)
-                    $scaleLabel = if ($cell -eq $size) { "native" } else { "x$([int]($cell / $size)) nearest" }
-                    $graphics.DrawString("${size}px ($scaleLabel)", [System.Drawing.SystemFonts]::MessageBoxFont, [System.Drawing.Brushes]::White, $x, 18)
+            $themes = @(
+                @{ Name = "Dark"; LabelY = 18; TileY = 48 },
+                @{ Name = "Light"; LabelY = 332; TileY = 362 }
+            )
+            foreach ($theme in $themes) {
+                $graphics.DrawString("$($theme.Name) theme", [System.Drawing.SystemFonts]::MessageBoxFont,
+                    [System.Drawing.Brushes]::White, 650, $theme.LabelY)
+                $x = 30
+                foreach ($size in $samples) {
+                    $cell = if ($size -eq 256) { 256 } else { 128 }
+                    $tile = Render-IconFrame -Size $size -Cell $cell -Theme $theme.Name
+                    try {
+                        $graphics.DrawImage($tile, $x, $theme.TileY, $cell, $cell)
+                        $scaleLabel = if ($cell -eq $size) { "native" } else { "x$([int]($cell / $size)) nearest" }
+                        $graphics.DrawString("${size}px ($scaleLabel)", [System.Drawing.SystemFonts]::MessageBoxFont,
+                            [System.Drawing.Brushes]::White, $x, $theme.LabelY)
+                    }
+                    finally { $tile.Dispose() }
+                    $x += $cell + 45
                 }
-                finally { $tile.Dispose() }
-                $x += $cell + 45
             }
             $parent = Split-Path -Parent ([System.IO.Path]::GetFullPath($Path))
             if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
