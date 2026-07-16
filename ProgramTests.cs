@@ -452,6 +452,10 @@ static class ProgramTests
                     "Quiet Glass shell reserves an 8px outer shadow gutter on all sides");
                 Expect(quietShell != null && quietShell.Effect is System.Windows.Media.Effects.DropShadowEffect,
                     "Quiet Glass shell has a drop shadow effect");
+                Expect(quietShell != null && quietShell.Background == System.Windows.Media.Brushes.Transparent,
+                    "Quiet Glass shell leaves the DWM glass backdrop visible without an opaque inner backplate");
+                Expect(quietShell != null && quietShell.BorderThickness == new System.Windows.Thickness(0),
+                    "Quiet Glass shell does not draw a redundant inner border");
                 System.Windows.Controls.Grid layoutGrid = quietShell == null ? null : quietShell.Child as System.Windows.Controls.Grid;
                 double rowHeight = 0;
                 if (layoutGrid != null) foreach (System.Windows.Controls.RowDefinition definition in layoutGrid.RowDefinitions) rowHeight += definition.Height.Value;

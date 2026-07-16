@@ -846,22 +846,16 @@ static class BuildUiFactory
         Bindings b = new Bindings();
         Border shell = new Border();
         shell.CornerRadius = new CornerRadius(Math.Max(0, Math.Min(30, settings.glass != null ? settings.glass.cornerRadius : 15)));
-        shell.Background = new LinearGradientBrush(
-            new GradientStopCollection {
-                new GradientStop(QuietGlassPalette.ShellTop, 0),
-                new GradientStop(QuietGlassPalette.InnerHighlight, 0.025),
-                new GradientStop(QuietGlassPalette.ShellBottom, 1)
-            },
-            new Point(0, 0),
-            new Point(1, 1));
-        shell.BorderBrush = new SolidColorBrush(QuietGlassPalette.ShellHighlight);
-        shell.BorderThickness = new Thickness(1);
+        shell.Background = Brushes.Transparent;
+        shell.BorderBrush = Brushes.Transparent;
+        shell.BorderThickness = new Thickness(0);
         shell.Margin = new Thickness(8);
         shell.Effect = new DropShadowEffect { Color = QuietGlassPalette.Shadow, BlurRadius = 12, ShadowDepth = 2, Opacity = 0.28 };
         shell.ClipToBounds = true; shell.SnapsToDevicePixels = true;
 
         Grid grid = new Grid();
-        grid.Margin = new Thickness(11, 7, 11, 5);
+        // Preserve the previous content inset after removing the redundant shell border.
+        grid.Margin = new Thickness(11, 8, 11, 6);
         int row = 0;
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(24) });
 
