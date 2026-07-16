@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using Microsoft.Win32;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -84,13 +86,19 @@ class UsageSnapshot
 
 class QuotaSnapshot
 {
-    public readonly bool Available;
+    public readonly bool Available, FiveHourAvailable, WeeklyAvailable;
     public readonly int FiveHourRemainingPercent, WeeklyRemainingPercent;
     public readonly DateTime? FiveHourResetsAt, WeeklyResetsAt;
     public readonly string Status;
     public QuotaSnapshot(bool available, int five, int week, string status, DateTime? fiveReset, DateTime? weekReset)
+        : this(available, available, five, week, status, fiveReset, weekReset)
     {
-        Available = available;
+    }
+    public QuotaSnapshot(bool fiveAvailable, bool weeklyAvailable, int five, int week, string status, DateTime? fiveReset, DateTime? weekReset)
+    {
+        FiveHourAvailable = fiveAvailable;
+        WeeklyAvailable = weeklyAvailable;
+        Available = fiveAvailable || weeklyAvailable;
         FiveHourRemainingPercent = Clamp(five);
         WeeklyRemainingPercent = Clamp(week);
         Status = status;
@@ -141,6 +149,91 @@ static class ProviderMath
     }
 }
 
+static class PresentationText
+{
+    public static string TMinus(DateTime? resetAt, DateTime now)
+    {
+        if (!resetAt.HasValue) return "";
+        TimeSpan remaining = resetAt.Value - now;
+        if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
+        int totalHours = (int)remaining.TotalHours;
+        return "\u2212" + totalHours.ToString("00") + ":" + remaining.Minutes.ToString("00");
+    }
+
+    public static string MiniMaxTMinus(string remainingText)
+    {
+        if (string.IsNullOrWhiteSpace(remainingText)) return "";
+        string text = remainingText.Trim().ToLowerInvariant();
+        int hours = 0, minutes = 0, seconds = 0;
+        int hourMarker = text.IndexOf('h');
+        int minuteMarker = text.IndexOf('m');
+        int secondMarker = text.IndexOf('s');
+        if (hourMarker != text.LastIndexOf('h') || minuteMarker != text.LastIndexOf('m') || secondMarker != text.LastIndexOf('s')) return "";
+        if ((minuteMarker >= 0 && hourMarker > minuteMarker)
+            || (secondMarker >= 0 && hourMarker > secondMarker)
+            || (secondMarker >= 0 && minuteMarker > secondMarker)) return "";
+        if (hourMarker >= 0 && !int.TryParse(text.Substring(0, hourMarker).Trim(), out hours)) return "";
+        int minuteStart = hourMarker >= 0 ? hourMarker + 1 : 0;
+        if (minuteMarker >= minuteStart && !int.TryParse(text.Substring(minuteStart, minuteMarker - minuteStart).Trim(), out minutes)) return "";
+        int secondStart = minuteMarker >= 0 ? minuteMarker + 1 : hourMarker >= 0 ? hourMarker + 1 : 0;
+        if (secondMarker >= secondStart && !int.TryParse(text.Substring(secondStart, secondMarker - secondStart).Trim(), out seconds)) return "";
+        int lastMarker = Math.Max(hourMarker, Math.Max(minuteMarker, secondMarker));
+        if (lastMarker < 0 || lastMarker != text.Length - 1) return "";
+        if (hours < 0 || minutes < 0 || seconds < 0 || seconds >= 60) return "";
+        hours += minutes / 60;
+        minutes %= 60;
+        return "\u2212" + hours.ToString("00") + ":" + minutes.ToString("00");
+    }
+}
+
+class HistoryPoint { public DateTime At; public int Percent; public HistoryPoint(DateTime at, int p) { At = at; Percent = p; } }
+
+class HistoryRing
+{
+    HistoryPoint[] buf; int head, count; readonly int capacity;
+    public HistoryRing(int cap) { capacity = Math.Max(1, cap); buf = new HistoryPoint[capacity]; }
+    public void Add(DateTime at, int p)
+    {
+        if (count > 0 && p > buf[(head - 1 + capacity) % capacity].Percent * 2) { Clear(); }
+        buf[head] = new HistoryPoint(at, ProviderMath.ClampPercent(p));
+        head = (head + 1) % capacity;
+        if (count < capacity) count++;
+    }
+    public void Clear() { head = count = 0; }
+    public int? SampleAtSecondsAgo(int seconds)
+    {
+        if (count == 0) return null;
+        DateTime target = DateTime.Now.AddSeconds(-seconds);
+        int? best = null; long bestDelta = long.MaxValue;
+        for (int i = 0; i < count; i++)
+        {
+            HistoryPoint pt = buf[(head - 1 - i + capacity) % capacity];
+            long delta = Math.Abs((long)(pt.At - target).TotalSeconds);
+            if (delta < bestDelta) { bestDelta = delta; best = pt.Percent; }
+        }
+        return best;
+    }
+    public int? Current { get { return count > 0 ? buf[(head - 1 + capacity) % capacity].Percent : (int?)null; } }
+}
+
+static class QuietGlassPalette
+{
+    public static readonly Color ShellTop = Color.FromArgb(232, 34, 36, 40);
+    public static readonly Color ShellBottom = Color.FromArgb(222, 20, 22, 25);
+    public static readonly Color ShellHighlight = Color.FromArgb(42, 255, 255, 255);
+    public static readonly Color InnerHighlight = Color.FromArgb(229, 40, 42, 46);
+    public static readonly Color Divider = Color.FromArgb(20, 255, 255, 255);
+    public static readonly Color Shadow = Colors.Black;
+    public static readonly Color Track = Color.FromArgb(92, 72, 76, 82);
+    public static readonly Color FiveHourAllowance = Color.FromRgb(67, 214, 164);
+    public static readonly Color WeeklyAllowance = Color.FromRgb(88, 168, 255);
+    public static readonly Color DeepSeekAllowance = Color.FromRgb(157, 124, 255);
+    public static readonly Color UnavailableAllowance = Colors.Black;
+    public static readonly Color PrimaryText = Color.FromRgb(232, 234, 236);
+    public static readonly Color SecondaryText = Color.FromRgb(145, 149, 154);
+    public static readonly Color SectionText = Color.FromRgb(132, 136, 142);
+}
+
 class MiniMaxSettings { public bool enabled = false; public string mmxPath = ""; public string region = "cn"; public string quotaModelName = "MiniMax-M*"; }
 class DeepSeekEstimateSettings { public bool enabled = true; public string model = "deepseek-v4-pro"; public decimal averageInputTokens = 30000m; public decimal averageOutputTokens = 8000m; public decimal cacheHitRatio = 0.3m; }
 class TokenPrices { public decimal inputCacheHit; public decimal inputCacheMiss; public decimal output; }
@@ -160,6 +253,56 @@ class DeepSeekSettings
 }
 class CodexSettings { public bool enabled = true; }
 class GlassSettings { public int cornerRadius = 15; }
+enum TrayIconMode { Default, Percentage }
+enum TrayIconVisualKind { Default, Percentage }
+
+sealed class TrayIconVisual : IEquatable<TrayIconVisual>
+{
+    public readonly TrayIconVisualKind Kind;
+    public readonly int Percentage;
+
+    public TrayIconVisual(TrayIconVisualKind kind, int percentage)
+    {
+        Kind = kind;
+        Percentage = kind == TrayIconVisualKind.Default
+            ? 0
+            : Math.Max(0, Math.Min(100, percentage));
+    }
+
+    public bool Equals(TrayIconVisual other)
+    {
+        return !object.ReferenceEquals(other, null)
+            && Kind == other.Kind
+            && Percentage == other.Percentage;
+    }
+
+    public override bool Equals(object obj) { return Equals(obj as TrayIconVisual); }
+    public override int GetHashCode() { return ((int)Kind * 397) ^ Percentage; }
+}
+
+static class TrayIconState
+{
+    public static TrayIconVisual Select(TrayIconMode mode, QuotaSnapshot quota)
+    {
+        if (mode == TrayIconMode.Percentage && quota != null && quota.FiveHourAvailable)
+            return new TrayIconVisual(TrayIconVisualKind.Percentage, quota.FiveHourRemainingPercent);
+        return new TrayIconVisual(TrayIconVisualKind.Default, 0);
+    }
+}
+
+class ActiveSettings
+{
+    public int refreshSeconds;
+    public CodexSettings codex;
+    public MiniMaxSettings minimax;
+    public DeepSeekSettings deepseek;
+    public int popupDismissDelayMs;
+    public int popupHoverDelayMs;
+    public double popupLeft, popupTop;
+    public bool popupStickyOnLaunch;
+    public bool launchAtLogin;
+    public string trayIconMode;
+}
 class DashboardSettings
 {
     public int refreshSeconds = 60;
@@ -169,6 +312,12 @@ class DashboardSettings
     public MiniMaxSettings minimax = new MiniMaxSettings();
     public DeepSeekSettings deepseek = new DeepSeekSettings();
     public GlassSettings glass = new GlassSettings();
+    public int popupDismissDelayMs = 300;
+    public int popupHoverDelayMs = 400;
+    public double popupLeft = double.NaN, popupTop = double.NaN;
+    public bool popupStickyOnLaunch = false;
+    public bool launchAtLogin = false;
+    public string trayIconMode = "default";
     static string FilePath { get { return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CodexDashboard", "settings.json"); } }
     public static DashboardSettings Load()
     {
@@ -187,7 +336,15 @@ class DashboardSettings
         if (settings.glass == null) settings.glass = new GlassSettings();
         if (settings.refreshSeconds < 15) settings.refreshSeconds = 60;
         settings.deepseek.balanceMode = NormalizeBalanceMode(settings.deepseek.balanceMode);
+        settings.trayIconMode = NormalizeTrayIconMode(settings.trayIconMode) == TrayIconMode.Percentage ? "percentage" : "default";
         return settings;
+    }
+
+    public static TrayIconMode NormalizeTrayIconMode(string raw)
+    {
+        return string.Equals(raw, "percentage", StringComparison.OrdinalIgnoreCase)
+            ? TrayIconMode.Percentage
+            : TrayIconMode.Default;
     }
 
     public static string NormalizeBalanceMode(string raw)
@@ -201,9 +358,73 @@ class DashboardSettings
     public void Save()
     {
         string dir = System.IO.Path.GetDirectoryName(FilePath); if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-        File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(this), Encoding.UTF8);
+        ActiveSettings active = new ActiveSettings
+        {
+            refreshSeconds = refreshSeconds,
+            codex = codex,
+            minimax = minimax,
+            deepseek = deepseek,
+            popupDismissDelayMs = popupDismissDelayMs,
+            popupHoverDelayMs = popupHoverDelayMs,
+            popupLeft = popupLeft,
+            popupTop = popupTop,
+            popupStickyOnLaunch = popupStickyOnLaunch,
+            launchAtLogin = launchAtLogin,
+            trayIconMode = trayIconMode
+        };
+        File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(active), Encoding.UTF8);
     }
     public static string PathForDisplay { get { return FilePath; } }
+}
+
+static class StartupRegistration
+{
+    const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    const string ValueName = "CodexDashboard";
+
+    public static void Apply(bool enabled)
+    {
+        using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKeyPath, true))
+        {
+            if (key == null) throw new InvalidOperationException("无法打开当前用户的启动项注册表位置。");
+            if (enabled) key.SetValue(ValueName, CommandFor(Process.GetCurrentProcess().MainModule.FileName), RegistryValueKind.String);
+            else key.DeleteValue(ValueName, false);
+        }
+    }
+
+    static string CommandFor(string executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath)) throw new ArgumentException("启动程序路径不能为空。", "executablePath");
+        return "\"" + executablePath.Replace("\"", "") + "\"";
+    }
+
+    internal static string CommandForTest(string executablePath)
+    {
+        return CommandFor(executablePath);
+    }
+}
+
+static class DashboardState
+{
+    public static event Action Changed;
+    public static UsageSnapshot Usage = new UsageSnapshot(false, 0, 0, 0, 0, "starting");
+    public static QuotaSnapshot CodexQuota = new QuotaSnapshot(false, 0, 0, "starting", null, null);
+    public static MiniMaxSnapshot MiniMax = new MiniMaxSnapshot(false, 0, 0, false, DateTime.MinValue, "not configured", ProviderSource.Cached);
+    public static DeepSeekSnapshot DeepSeek = new DeepSeekSnapshot(false, 0m, 0m, 0m, "CNY", false, DateTime.MinValue, "not configured", ProviderSource.Cached);
+    public static DateTime LastRefreshAt = DateTime.MinValue;
+
+    static void Fire()
+    {
+        Action handler = Changed;
+        if (handler == null) return;
+        System.Windows.Application app = System.Windows.Application.Current;
+        if (app == null) return;
+        app.Dispatcher.BeginInvoke(handler);
+    }
+    public static void SetUsage(UsageSnapshot s) { Usage = s; LastRefreshAt = DateTime.Now; Fire(); }
+    public static void SetCodexQuota(QuotaSnapshot s) { CodexQuota = s; Fire(); }
+    public static void SetMiniMax(MiniMaxSnapshot s) { MiniMax = s; Fire(); }
+    public static void SetDeepSeek(DeepSeekSnapshot s) { DeepSeek = s; Fire(); }
 }
 
 class MiniMaxCommand { public readonly string FileName, Arguments; public MiniMaxCommand(string fileName, string arguments) { FileName = fileName; Arguments = arguments; } }
@@ -267,8 +488,12 @@ static class MiniMaxQuota
             string s = Convert.ToString(raw);
             long val;
             if (!long.TryParse(s, out val)) return s; // already human-readable — pass through
-            // Raw numeric with unknown unit — suppress display
-            return "";
+            // Convert numeric: > 1M = milliseconds, otherwise seconds
+            long sec = val > 1000000 ? val / 1000 : val;
+            if (sec <= 0) return "";
+            if (sec < 60) return sec + "s";
+            if (sec < 3600) return (sec / 60) + "m " + (sec % 60) + "s";
+            return (sec / 3600) + "h " + ((sec % 3600) / 60) + "m";
         }
     }
     static void Walk(object value, List<Dictionary<string, object>> rows)
@@ -425,6 +650,7 @@ static class ProcessRunner
 
 static class CodexAppServerQuota
 {
+    internal static QuotaSnapshot ParseForTest(string text) { return Parse(text); }
 
     static string FindCodexExe()
     {
@@ -481,11 +707,11 @@ static class CodexAppServerQuota
             p.BeginOutputReadLine(); p.BeginErrorReadLine();
             p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-dashboard\",\"version\":\"1\"},\"capabilities\":{\"experimentalApi\":true,\"requestAttestation\":false,\"optOutNotificationMethods\":[]}}}");
             p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
-            p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}");
+            p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":null}");
             p.StandardInput.Flush();
             if (!got.WaitOne(15000)) throw new Exception("quota timeout");
             QuotaSnapshot quota = Parse(response);
-            if (quota == null) throw new Exception("quota missing 5h/week values");
+            if (quota == null) throw new Exception("quota response contains no recognized rate-limit windows");
             return quota;
         }
         finally
@@ -516,17 +742,56 @@ static class CodexAppServerQuota
     static QuotaSnapshot Parse(string text)
     {
         object obj = new JavaScriptSerializer().DeserializeObject(text);
-        List<LimitWindow> windows = new List<LimitWindow>();
-        Walk(obj, windows);
+        List<LimitWindow> windows = CollectRateLimitWindows(obj);
         int? five = null, week = null; DateTime? fiveReset = null, weekReset = null;
         foreach (LimitWindow w in windows)
         {
             int remaining = Math.Max(0, Math.Min(100, (int)Math.Round(100.0 - w.UsedPercent)));
-            if (w.DurationMins == 300) { five = remaining; fiveReset = w.ResetsAt; }
-            if (w.DurationMins == 10080) { week = remaining; weekReset = w.ResetsAt; }
+            if (w.DurationMins == 300 && !five.HasValue) { five = remaining; fiveReset = w.ResetsAt; }
+            if (w.DurationMins == 10080 && !week.HasValue) { week = remaining; weekReset = w.ResetsAt; }
         }
-        if (!five.HasValue || !week.HasValue) return null;
-        return new QuotaSnapshot(true, five.Value, week.Value, "codex app-server", fiveReset, weekReset);
+        if (!five.HasValue && !week.HasValue) return null;
+        return new QuotaSnapshot(
+            five.HasValue, week.HasValue,
+            five.GetValueOrDefault(), week.GetValueOrDefault(),
+            "codex app-server", fiveReset, weekReset);
+    }
+
+    static List<LimitWindow> CollectRateLimitWindows(object obj)
+    {
+        List<LimitWindow> windows = new List<LimitWindow>();
+        Dictionary<string, object> envelope = obj as Dictionary<string, object>;
+        Dictionary<string, object> result = null;
+        object resultObj;
+        if (envelope != null && envelope.TryGetValue("result", out resultObj))
+            result = resultObj as Dictionary<string, object>;
+        if (result == null) result = envelope;
+
+        bool collectedPreferred = false;
+        object byIdObj;
+        Dictionary<string, object> byId = null;
+        if (result != null && result.TryGetValue("rateLimitsByLimitId", out byIdObj))
+            byId = byIdObj as Dictionary<string, object>;
+        if (byId != null)
+        {
+            object codexBucket;
+            if (byId.TryGetValue("codex", out codexBucket))
+            {
+                Walk(codexBucket, windows);
+                collectedPreferred = windows.Count > 0;
+            }
+            if (!collectedPreferred)
+            {
+                foreach (object bucket in byId.Values) Walk(bucket, windows);
+                collectedPreferred = windows.Count > 0;
+            }
+        }
+
+        object legacyObj;
+        if (result != null && result.TryGetValue("rateLimits", out legacyObj))
+            Walk(legacyObj, windows);
+        if (windows.Count == 0) Walk(obj, windows);
+        return windows;
     }
 
     static void Walk(object obj, List<LimitWindow> windows)
@@ -553,7 +818,321 @@ static class CodexAppServerQuota
     class LimitWindow { public readonly int DurationMins; public readonly double UsedPercent; public readonly DateTime? ResetsAt; public LimitWindow(int d, double u, DateTime? r) { DurationMins = d; UsedPercent = u; ResetsAt = r; } }
 }
 
-class LiquidWindow : Window
+class Bindings
+{
+    public TextBlock timeText, codexHeading, miniHeading, deepSeekHeading;
+    public TextBlock fivePercent, fiveUsed, weekPercent, weekUsed;
+    public TextBlock codexTokenUsage;
+    public TextBlock miniFivePercent, miniFiveUsed, miniWeekPercent, miniWeekUsed;
+    public TextBlock deepSeekPercent, deepSeekUsed;
+    public System.Windows.Controls.Button refreshButton;
+    public System.Windows.Shapes.Ellipse statusDot, statusGlow;
+    public System.Windows.Controls.Border fiveFill, fiveTrack, weekFill, weekTrack;
+    public System.Windows.Controls.Border miniFiveFill, miniFiveTrack, miniWeekFill, miniWeekTrack;
+    public System.Windows.Controls.Border deepSeekFill, deepSeekTrack;
+    public FrameworkElement stickyPinButton;
+}
+
+class BuildResult
+{
+    public UIElement Root;
+    public Bindings Bindings;
+}
+
+static class BuildUiFactory
+{
+    public static BuildResult Build(DashboardSettings settings)
+    {
+        Bindings b = new Bindings();
+        Border shell = new Border();
+        shell.CornerRadius = new CornerRadius(Math.Max(0, Math.Min(30, settings.glass != null ? settings.glass.cornerRadius : 15)));
+        shell.Background = new LinearGradientBrush(
+            new GradientStopCollection {
+                new GradientStop(QuietGlassPalette.ShellTop, 0),
+                new GradientStop(QuietGlassPalette.InnerHighlight, 0.025),
+                new GradientStop(QuietGlassPalette.ShellBottom, 1)
+            },
+            new Point(0, 0),
+            new Point(1, 1));
+        shell.BorderBrush = new SolidColorBrush(QuietGlassPalette.ShellHighlight);
+        shell.BorderThickness = new Thickness(1);
+        shell.Margin = new Thickness(8);
+        shell.Effect = new DropShadowEffect { Color = QuietGlassPalette.Shadow, BlurRadius = 12, ShadowDepth = 2, Opacity = 0.28 };
+        shell.ClipToBounds = true; shell.SnapsToDevicePixels = true;
+
+        Grid grid = new Grid();
+        grid.Margin = new Thickness(11, 7, 11, 5);
+        int row = 0;
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(24) });
+
+        Grid header = new Grid();
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
+        header.ColumnDefinitions.Add(new ColumnDefinition());
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+        Grid lamp = new Grid { Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Left, ClipToBounds = false };
+        b.statusGlow = new System.Windows.Shapes.Ellipse { Width = 17, Height = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        b.statusDot = new System.Windows.Shapes.Ellipse { Width = 5.5, Height = 5.5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        lamp.Children.Add(b.statusGlow); lamp.Children.Add(b.statusDot);
+        b.timeText = MakeText("", 12, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Medium);
+        b.timeText.HorizontalAlignment = HorizontalAlignment.Center;
+        Grid pinHit = new Grid { Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Right };
+        System.Windows.Shapes.Ellipse pin = new System.Windows.Shapes.Ellipse { Width = 16, Height = 16, Stroke = new SolidColorBrush(QuietGlassPalette.PrimaryText), StrokeThickness = 1.5, Fill = Brushes.Transparent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        pinHit.Children.Add(pin);
+        ToolTipService.SetToolTip(pinHit, "钉住 popup");
+        b.stickyPinButton = pinHit;
+        Grid.SetColumn(lamp, 0); Grid.SetColumn(b.timeText, 1); Grid.SetColumn(pinHit, 2);
+        header.Children.Add(lamp); header.Children.Add(b.timeText); header.Children.Add(pinHit);
+        Grid.SetRow(header, row++); grid.Children.Add(header);
+
+        AppendProviderSections(grid, settings, b, ref row);
+        AppendFooter(grid, b, row);
+
+        shell.Child = grid;
+        BuildResult result = new BuildResult();
+        result.Root = shell;
+        result.Bindings = b;
+        return result;
+    }
+
+    static void AppendProviderSections(Grid grid, DashboardSettings s, Bindings b, ref int row)
+    {
+        if (s.codex.enabled)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
+            b.codexHeading = AddSectionHeader(grid, row++, "CODEX");
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
+            AddDivider(grid, row++);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(55) });
+            AddCompositeBar(grid, b, row++);
+        }
+
+        if (s.minimax.enabled)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(s.codex.enabled ? 10 : 4) });
+            row++;
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
+            b.miniHeading = AddSectionHeader(grid, row++, "MINIMAX");
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
+            AddDivider(grid, row++);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(55) });
+            AddMiniMaxCompositeBar(grid, b, row++);
+        }
+
+        if (s.deepseek.enabled)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength((s.codex.enabled || s.minimax.enabled) ? 10 : 4) });
+            row++;
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
+            b.deepSeekHeading = AddSectionHeader(grid, row++, "DEEPSEEK");
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
+            AddDivider(grid, row++);
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
+            AddMeter(grid, b, row++, "Balance");
+        }
+    }
+
+    static void AppendFooter(Grid grid, Bindings b, int row)
+    {
+        Grid footer = new Grid();
+        b.refreshButton = new System.Windows.Controls.Button
+        {
+            Content = "Refresh",
+            Width = 96,
+            Height = 25,
+            Padding = new Thickness(0),
+            FontSize = 10.5,
+            FontWeight = FontWeights.Medium,
+            Foreground = new SolidColorBrush(QuietGlassPalette.PrimaryText),
+            Background = new SolidColorBrush(Color.FromArgb(36, 255, 255, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(48, 255, 255, 255)),
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            FocusVisualStyle = null,
+            IsTabStop = false,
+            Cursor = Cursors.Hand,
+            ToolTip = "立即刷新",
+            Template = MakeRefreshButtonTemplate()
+        };
+        b.refreshButton.Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 5, ShadowDepth = 1, Opacity = 0.18 };
+        footer.Children.Add(b.refreshButton);
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
+        Grid.SetRow(footer, row); grid.Children.Add(footer);
+    }
+
+    static ControlTemplate MakeRefreshButtonTemplate()
+    {
+        FrameworkElementFactory shell = new FrameworkElementFactory(typeof(Border));
+        shell.SetValue(Border.CornerRadiusProperty, new CornerRadius(13));
+        shell.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromArgb(46, 255, 255, 255)));
+        shell.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromArgb(62, 255, 255, 255)));
+        shell.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+
+        FrameworkElementFactory content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(ContentPresenter.ContentSourceProperty, "Content");
+        content.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+        shell.AppendChild(content);
+
+        ControlTemplate template = new ControlTemplate(typeof(System.Windows.Controls.Button));
+        template.VisualTree = shell;
+        return template;
+    }
+
+    internal static TextBlock MakeText(string text, double size, byte a, byte r, byte g, byte bl, FontWeight weight)
+    {
+        return new TextBlock { Text = text, FontSize = size, Foreground = new SolidColorBrush(Color.FromArgb(a == 0 ? (byte)255 : a, r, g, bl)), FontWeight = weight, VerticalAlignment = VerticalAlignment.Center };
+    }
+
+    static TextBlock AddSectionHeader(Grid parent, int row, string label)
+    {
+        TextBlock heading = MakeText(label, 10.5, 0, QuietGlassPalette.SectionText.R, QuietGlassPalette.SectionText.G, QuietGlassPalette.SectionText.B, FontWeights.Medium);
+        heading.VerticalAlignment = VerticalAlignment.Bottom;
+        Grid.SetRow(heading, row); parent.Children.Add(heading);
+        return heading;
+    }
+
+    static void AddDivider(Grid parent, int row)
+    {
+        Border line = new Border { Height = 1, Background = new SolidColorBrush(QuietGlassPalette.Divider), Margin = new Thickness(0, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetRow(line, row); parent.Children.Add(line);
+    }
+
+    static Border BarTrack(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(QuietGlassPalette.Track), VerticalAlignment = VerticalAlignment.Top }; }
+    static Border BarFill(int h) { return new Border { Height = h, CornerRadius = new CornerRadius(2), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top }; }
+
+    enum BarSide { Codex, MiniMax }
+
+    static void AddCompositeBar(Grid parent, Bindings b, int row)
+    {
+        AddCompositeBarImpl(parent, b, row, BarSide.Codex);
+    }
+
+    static void AddMiniMaxCompositeBar(Grid parent, Bindings b, int row)
+    {
+        AddCompositeBarImpl(parent, b, row, BarSide.MiniMax);
+    }
+
+    static void AddCompositeBarImpl(Grid parent, Bindings b, int row, BarSide side)
+    {
+        bool isCodex = side == BarSide.Codex;
+
+        Grid block = new Grid();
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+        block.ColumnDefinitions.Add(new ColumnDefinition());
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
+        block.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 18 : 22) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(4) });
+        block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(isCodex ? 14 : 21) });
+        if (isCodex) block.RowDefinitions.Add(new RowDefinition { Height = new GridLength(11) });
+
+        TextBlock fivePct = MakeText("--", 14, 0, QuietGlassPalette.PrimaryText.R, QuietGlassPalette.PrimaryText.G, QuietGlassPalette.PrimaryText.B, FontWeights.SemiBold); fivePct.HorizontalAlignment = HorizontalAlignment.Right;
+        TextBlock fiveUsed = MakeText("", 10, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal); fiveUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Border fiveTrack = BarTrack(8); Border fiveFill = BarFill(8);
+        TextBlock weekPct = MakeText("--", 12, 0, QuietGlassPalette.PrimaryText.R, QuietGlassPalette.PrimaryText.G, QuietGlassPalette.PrimaryText.B, FontWeights.Medium); weekPct.HorizontalAlignment = HorizontalAlignment.Right;
+        TextBlock weekUsed = MakeText("", 10, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal); weekUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Border weekTrack = BarTrack(4); Border weekFill = BarFill(4);
+
+        if (isCodex)
+        {
+            b.fivePercent = fivePct; b.fiveUsed = fiveUsed;
+            b.fiveTrack = fiveTrack; b.fiveFill = fiveFill;
+            b.weekPercent = weekPct; b.weekUsed = weekUsed;
+            b.weekTrack = weekTrack; b.weekFill = weekFill;
+        }
+        else
+        {
+            b.miniFivePercent = fivePct; b.miniFiveUsed = fiveUsed;
+            b.miniFiveTrack = fiveTrack; b.miniFiveFill = fiveFill;
+            b.miniWeekPercent = weekPct; b.miniWeekUsed = weekUsed;
+            b.miniWeekTrack = weekTrack; b.miniWeekFill = weekFill;
+        }
+
+        TextBlock fLabel = MakeText("5H", 10.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Medium);
+        Grid.SetColumn(fiveUsed, 2); Grid.SetColumn(fivePct, 3);
+        Grid.SetRow(fLabel, 0); Grid.SetRow(fiveUsed, 0); Grid.SetRow(fivePct, 0);
+        block.Children.Add(fLabel); block.Children.Add(fiveUsed); block.Children.Add(fivePct);
+
+        Grid bar5 = new Grid(); bar5.Children.Add(fiveTrack); bar5.Children.Add(fiveFill);
+        Grid.SetRow(bar5, 1); Grid.SetColumnSpan(bar5, 4); block.Children.Add(bar5);
+
+        Grid barW = new Grid(); barW.Children.Add(weekTrack); barW.Children.Add(weekFill);
+        Grid.SetRow(barW, 2); Grid.SetColumnSpan(barW, 4); block.Children.Add(barW);
+
+        TextBlock wLabel = MakeText("W", 10.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal);
+        Grid.SetColumn(weekUsed, 2); Grid.SetColumn(weekPct, 3);
+        Grid.SetRow(wLabel, 3); Grid.SetRow(weekUsed, 3); Grid.SetRow(weekPct, 3);
+        block.Children.Add(wLabel); block.Children.Add(weekUsed); block.Children.Add(weekPct);
+
+        if (isCodex)
+        {
+            b.codexTokenUsage = MakeText("", 9, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal);
+            b.codexTokenUsage.HorizontalAlignment = HorizontalAlignment.Right;
+            Grid.SetRow(b.codexTokenUsage, 4); Grid.SetColumnSpan(b.codexTokenUsage, 4);
+            block.Children.Add(b.codexTokenUsage);
+        }
+
+        Grid.SetRow(block, row); parent.Children.Add(block);
+    }
+
+    static void AddMeter(Grid parent, Bindings b, int row, string label, int barH = 6)
+    {
+        Grid line = new Grid();
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
+        line.ColumnDefinitions.Add(new ColumnDefinition());
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
+        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
+        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(barH + 4) });
+
+        TextBlock lt = MakeText(label, 10.5, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Medium);
+        b.deepSeekPercent = MakeText("--", 14, 0, QuietGlassPalette.PrimaryText.R, QuietGlassPalette.PrimaryText.G, QuietGlassPalette.PrimaryText.B, FontWeights.SemiBold); b.deepSeekPercent.HorizontalAlignment = HorizontalAlignment.Right;
+        b.deepSeekUsed = MakeText("", 10, 0, QuietGlassPalette.SecondaryText.R, QuietGlassPalette.SecondaryText.G, QuietGlassPalette.SecondaryText.B, FontWeights.Normal); b.deepSeekUsed.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(b.deepSeekUsed, 2); Grid.SetColumn(b.deepSeekPercent, 3);
+        line.Children.Add(lt); line.Children.Add(b.deepSeekUsed); line.Children.Add(b.deepSeekPercent);
+
+        b.deepSeekTrack = BarTrack(barH); b.deepSeekFill = BarFill(barH);
+        Grid bg = new Grid(); bg.Children.Add(b.deepSeekTrack); bg.Children.Add(b.deepSeekFill);
+        Grid.SetRow(bg, 1); Grid.SetColumnSpan(bg, 4); line.Children.Add(bg);
+
+        Grid.SetRow(line, row); parent.Children.Add(line);
+    }
+}
+
+class PendingPopupPosition
+{
+    bool _hasValue;
+    double _left, _top;
+
+    public bool CaptureIfEligible(bool eligible, double left, double top)
+    {
+        if (!eligible || double.IsNaN(left) || double.IsNaN(top)) return false;
+        _left = left;
+        _top = top;
+        _hasValue = true;
+        return true;
+    }
+
+    public bool TryTake(out double left, out double top)
+    {
+        if (!_hasValue)
+        {
+            left = double.NaN;
+            top = double.NaN;
+            return false;
+        }
+
+        left = _left;
+        top = _top;
+        _hasValue = false;
+        return true;
+    }
+}
+
+class PopupWindow : Window
 {
     const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
@@ -570,200 +1149,464 @@ class LiquidWindow : Window
     [StructLayout(LayoutKind.Sequential)] struct WindowCompositionAttributeData { public WindowCompositionAttribute Attribute; public IntPtr Data; public int SizeOfData; }
     [StructLayout(LayoutKind.Sequential)] struct Margins { public int Left, Right, Top, Bottom; }
 
-    UsageSnapshot usage = new UsageSnapshot(false, 0, 0, 0, 0, "starting");
-    QuotaSnapshot quota = new QuotaSnapshot(false, 0, 0, "starting", null, null);
-    MiniMaxSnapshot minimax = new MiniMaxSnapshot(false, 0, 0, false, DateTime.MinValue, "not configured", ProviderSource.Cached);
-    DeepSeekSnapshot deepseek = new DeepSeekSnapshot(false, 0m, 0m, 0m, "CNY", false, DateTime.MinValue, "not configured", ProviderSource.Cached);
-    DashboardSettings settings;
-    DateTime nextRefreshAt = DateTime.Now, lastRefreshAt = DateTime.MinValue;
-    bool codexBusy, minimaxBusy, deepseekBusy;
-    string dbPath = Environment.ExpandEnvironmentVariables("%USERPROFILE%\\.codex\\state_5.sqlite");
-    DispatcherTimer tick;
+    public DashboardSettings Settings;
+    public Bindings Bindings;
+    DispatcherTimer _saveDebounce;
+    DispatcherTimer _countdownTick;
+    readonly PendingPopupPosition _pendingPopupPosition = new PendingPopupPosition();
+    DateTime _nextRefreshAt;
+    bool _isSticky;
+    bool _codexBusy, _minimaxBusy, _deepseekBusy;
+    string _dbPath = Environment.ExpandEnvironmentVariables("%USERPROFILE%\\.codex\\state_5.sqlite");
+    Grid _stickyPinGrid;
+    System.Windows.Shapes.Ellipse _pinEllipse;
+    SolidColorBrush _pinFill;
 
-    const int ResizeGrip = 9;
-    const int WM_NCHITTEST = 0x0084;
-    const int HTLEFT = 10, HTRIGHT = 11, HTTOP = 12, HTTOPLEFT = 13, HTTOPRIGHT = 14, HTBOTTOM = 15, HTBOTTOMLEFT = 16, HTBOTTOMRIGHT = 17;
+    public bool IsSticky { get { return _isSticky; } }
 
-    TextBlock timeText, codexHeading, miniHeading, deepSeekHeading;
-    TextBlock fivePercent, fiveUsed, weekPercent, weekUsed, miniFivePercent, miniFiveUsed, miniWeekPercent, miniWeekUsed, deepSeekPercent, deepSeekUsed, footerLeft, footerRight, footerSub;
-    Ellipse statusDot, statusGlow;
-    Border shell;
-    Border fiveFill, weekFill, fiveTrack, weekTrack, miniFiveFill, miniWeekFill, miniFiveTrack, miniWeekTrack, deepSeekFill, deepSeekTrack;
-
-    public LiquidWindow()
+    public PopupWindow(DashboardSettings settings)
     {
-        settings = DashboardSettings.Load();
-        Width = settings.windowWidth > 0 ? settings.windowWidth : 360;
-        Height = settings.windowHeight > 0 ? settings.windowHeight : DesiredHeight();
+        Settings = settings;
         WindowStyle = WindowStyle.None;
-        ResizeMode = ResizeMode.CanResize;
-        MinWidth = 320; MinHeight = 150;
         ShowInTaskbar = false;
-        Topmost = settings.windowTopmost;
+        ShowActivated = false;
+        WindowStartupLocation = WindowStartupLocation.Manual;
         AllowsTransparency = true;
         Background = Brushes.Transparent;
+        Topmost = false;
+        MinWidth = 320; MinHeight = 150;
         FontFamily = new FontFamily("Segoe UI");
-        UseLayoutRounding = true;
-        SnapsToDevicePixels = true;
-        double left = double.IsNaN(settings.windowLeft) ? double.NaN : settings.windowLeft;
-        double top = double.IsNaN(settings.windowTop) ? double.NaN : settings.windowTop;
-        if (!IsOnScreen(left, top, Width, Height))
+        UseLayoutRounding = true; SnapsToDevicePixels = true;
+        Width = 360;
+        Height = DesiredHeight(settings);
+
+        BuildResult buildResult = BuildUiFactory.Build(settings);
+        Bindings = buildResult.Bindings;
+        Content = buildResult.Root;
+
+        if (!double.IsNaN(settings.popupLeft)) Left = settings.popupLeft;
+        if (!double.IsNaN(settings.popupTop)) Top = settings.popupTop;
+
+        SourceInitialized += delegate { EnableSystemGlass(this); };
+        Activated += delegate { };
+        Deactivated += delegate { HandleDeactivated(); };
+        Closing += delegate(object s2, CancelEventArgs e)
         {
-            left = SystemParameters.WorkArea.Right - Width - 18;
-            top = SystemParameters.WorkArea.Top + 72;
-        }
-        Left = left; Top = top;
-        Closed += delegate
-        {
-            if (WindowState == WindowState.Normal)
+            if (_isSticky) { e.Cancel = true; Hide(); }
+            else
             {
-                settings.windowLeft = Left; settings.windowTop = Top;
-                settings.windowWidth = Width; settings.windowHeight = Height;
+                System.Windows.Application app = System.Windows.Application.Current;
+                if (app != null) app.Shutdown();
             }
-            settings.windowTopmost = Topmost;
-            try { settings.Save(); } catch { }
-        };
-        SourceInitialized += delegate
-        {
-            HwndSource source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
-            if (source != null) source.AddHook(WndProc);
-            EnableSystemGlass();
-        };
-        MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
-        {
-            if (IsOnResizeEdge(e.GetPosition(this))) return;
-            try { DragMove(); } catch { }
         };
 
-        ContextMenu menu = new ContextMenu();
-        MenuItem refresh = new MenuItem(); refresh.Header = "刷新"; refresh.Click += delegate { StartRefresh(); };
-        MenuItem providerSettings = new MenuItem(); providerSettings.Header = "设置..."; providerSettings.Click += delegate { ShowProviderSettings(); };
-        MenuItem topmost = new MenuItem(); topmost.Header = "置顶"; topmost.Click += delegate { Topmost = !Topmost; };
-        MenuItem exit = new MenuItem(); exit.Header = "退出"; exit.Click += delegate { Close(); };
-        menu.Items.Add(refresh); menu.Items.Add(providerSettings); menu.Items.Add(new Separator()); menu.Items.Add(topmost); menu.Items.Add(exit);
-        ContextMenu = menu;
+        MouseLeave += delegate { /* handled by TrayController */ };
+        MouseEnter += delegate { /* handled by TrayController */ };
 
-        Content = BuildUi();
-        ApplyPercentEffects();
-        tick = new DispatcherTimer();
-        tick.Interval = TimeSpan.FromSeconds(1);
-        tick.Tick += delegate { if (DateTime.Now >= nextRefreshAt) StartRefresh(); else Render(); };
-        tick.Start();
+        Bindings.timeText.PreviewMouseLeftButtonDown += delegate(object s2, MouseButtonEventArgs e)
+        {
+            if (e.GetPosition(this).Y <= 24)
+            {
+                try { DragMove(); } catch { }
+                e.Handled = true;
+            }
+        };
+
+        _saveDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _saveDebounce.Tick += delegate(object s2, EventArgs e2)
+        {
+            _saveDebounce.Stop();
+            double pendingLeft, pendingTop;
+            if (!_pendingPopupPosition.TryTake(out pendingLeft, out pendingTop)) return;
+            Settings.popupLeft = pendingLeft;
+            Settings.popupTop = pendingTop;
+            try { Settings.Save(); } catch { }
+        };
+        LocationChanged += delegate
+        {
+            if (!_pendingPopupPosition.CaptureIfEligible(_isSticky, Left, Top)) return;
+            _saveDebounce.Stop();
+            _saveDebounce.Start();
+        };
+
+        DashboardState.Changed += Render;
+        _nextRefreshAt = DateTime.Now.AddSeconds(Settings.refreshSeconds);
+        DashboardState.Changed += delegate { _nextRefreshAt = DateTime.Now.AddSeconds(Settings.refreshSeconds); };
+        _countdownTick = new DispatcherTimer();
+        _countdownTick.Interval = TimeSpan.FromSeconds(1);
+        _countdownTick.Tick += delegate { if (DateTime.Now >= _nextRefreshAt) StartRefresh(); RenderCountdown(); Render(); };
+        _countdownTick.Start();
+        RenderCountdown();
+        Render();
+        BindToStickyButton();
+        if (Bindings.refreshButton != null) Bindings.refreshButton.Click += delegate { StartRefresh(); };
         StartRefresh();
     }
 
-    UIElement BuildUi()
+    void RenderCountdown()
     {
-        shell = new Border();
-        shell.CornerRadius = new CornerRadius(15);
-        // Background is set below with glass settings applied
-        // BorderBrush/Thickness removed — the drop shadow + dark gradient define the edge.
-        shell.ClipToBounds = true;
-        shell.SnapsToDevicePixels = true;
-
-        // Content grid uses Margin (not shell.Padding) so the glass overlay
-        // below can extend to the shell's exact rounded outer edge — keeps
-        // the highlight perfectly aligned with the panel.
-        Grid grid = new Grid();
-        grid.Margin = new Thickness(20, 16, 20, 14);
-        int row = 0;
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(24) });
-
-        Grid header = new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition());
-        header.ColumnDefinitions.Add(new ColumnDefinition());
-        Grid lamp = new Grid { Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Left, ClipToBounds = false };
-        statusGlow = new Ellipse { Width = 17, Height = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        statusDot = new Ellipse { Width = 5.5, Height = 5.5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        lamp.Children.Add(statusGlow); lamp.Children.Add(statusDot);
-        timeText = Text("", 12, 0, 170, 184, 204, FontWeights.SemiBold);
-        timeText.HorizontalAlignment = HorizontalAlignment.Right;
-        header.Children.Add(lamp); Grid.SetColumn(timeText, 1); header.Children.Add(timeText);
-        Grid.SetRow(header, row++); grid.Children.Add(header);
-
-        // ===== CODEX section =====
-        if (settings.codex.enabled)
-        {
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
-            codexHeading = AddSectionHeader(grid, row++, "CODEX");
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
-            AddDivider(grid, row++);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "5h", out fivePercent, out fiveUsed, out fiveTrack, out fiveFill);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "Week", out weekPercent, out weekUsed, out weekTrack, out weekFill);
-        }
-
-        // ===== MINIMAX section =====
-        if (settings.minimax.enabled)
-        {
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(settings.codex.enabled ? 10 : 4) });
-            row++;
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
-            miniHeading = AddSectionHeader(grid, row++, "MINIMAX");
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
-            AddDivider(grid, row++);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "5h", out miniFivePercent, out miniFiveUsed, out miniFiveTrack, out miniFiveFill);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "Week", out miniWeekPercent, out miniWeekUsed, out miniWeekTrack, out miniWeekFill);
-        }
-
-        // ===== DEEPSEEK section =====
-        if (settings.deepseek.enabled)
-        {
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength((settings.codex.enabled || settings.minimax.enabled) ? 10 : 4) });
-            row++;
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
-            deepSeekHeading = AddSectionHeader(grid, row++, "DEEPSEEK");
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3) });
-            AddDivider(grid, row++);
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(42) });
-            AddMeter(grid, row++, "Balance", out deepSeekPercent, out deepSeekUsed, out deepSeekTrack, out deepSeekFill);
-        }
-
-        Grid footer = new Grid();
-        footer.RowDefinitions.Add(new RowDefinition()); footer.RowDefinitions.Add(new RowDefinition());
-        footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition());
-        footerLeft = Text("", 11, 0, 150, 164, 184, FontWeights.Normal);
-        footerRight = Text("", 11, 0, 158, 174, 196, FontWeights.Normal); footerRight.HorizontalAlignment = HorizontalAlignment.Right;
-        footerSub = Text("", 10.5, 0, 110, 124, 146, FontWeights.Normal); footerSub.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(footerRight, 1); footer.Children.Add(footerLeft); footer.Children.Add(footerRight);
-        Grid.SetRow(footerSub, 1); Grid.SetColumnSpan(footerSub, 2); footer.Children.Add(footerSub);
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
-        Grid.SetRow(footer, row); grid.Children.Add(footer);
-
-        int cr = Math.Max(0, Math.Min(30, settings.glass.cornerRadius));
-        shell.CornerRadius = new CornerRadius(cr);
-        shell.Background = new SolidColorBrush(Color.FromArgb(112, 28, 33, 48));
-        shell.Child = grid;
-        return shell;
+        if (Bindings == null || Bindings.refreshButton == null) return;
+        int seconds = Math.Max(0, (int)Math.Ceiling((_nextRefreshAt - DateTime.Now).TotalSeconds));
+        Bindings.refreshButton.Content = "Refresh " + seconds + "s";
     }
 
-    void ApplyPercentEffects()
+    internal void HandleDeactivated()
     {
-        if (settings.codex.enabled) { fivePercent.Effect = PercentEffect(); weekPercent.Effect = PercentEffect(); }
-        if (settings.minimax.enabled) { miniFivePercent.Effect = PercentEffect(); miniWeekPercent.Effect = PercentEffect(); }
-        if (settings.deepseek.enabled) deepSeekPercent.Effect = PercentEffect();
+        if (_isSticky) Topmost = true;
     }
 
-    static DropShadowEffect PercentEffect() { return new DropShadowEffect { Color = Colors.Black, BlurRadius = 4, ShadowDepth = 1, Opacity = 0.28 }; }
-
-    double DesiredHeight()
+    public void BindToStickyButton()
     {
-        double h = 62; // header (24) + footer (38)
-        if (settings != null && settings.codex.enabled) h += 17 + 3 + 42 + 42;
-        if (settings != null && settings.minimax.enabled) h += (settings.codex.enabled ? 10 : 4) + 17 + 3 + 42 + 42;
-        if (settings != null && settings.deepseek.enabled) h += ((settings.codex.enabled || settings.minimax.enabled) ? 10 : 4) + 17 + 3 + 42;
-        return h + 30; // grid margin (16+14)
+        Grid grid = Bindings.stickyPinButton as Grid;
+        if (grid == null) return;
+
+        System.Windows.Shapes.Ellipse pin = null;
+        foreach (UIElement child in grid.Children)
+        {
+            pin = child as System.Windows.Shapes.Ellipse;
+            if (pin != null) break;
+        }
+        if (pin == null) return;
+
+        _stickyPinGrid = grid;
+        _pinEllipse = pin;
+        _pinFill = new SolidColorBrush(Colors.Transparent);
+        pin.Fill = _pinFill;
+        ToolTipService.SetToolTip(grid, "钉住 popup");
+
+        grid.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            if (_isSticky)
+            {
+                LeaveSticky();
+            }
+            else
+            {
+                AnimatePin(_pinEllipse, _pinFill, true);
+                EnterSticky();
+                ToolTipService.SetToolTip(_stickyPinGrid, "已钉住（再次点击 📌 取消）");
+            }
+        };
     }
 
-    void ShowProviderSettings()
+    static void AnimatePin(System.Windows.Shapes.Ellipse pin, SolidColorBrush fill, bool toSticky)
+    {
+        if (pin == null || fill == null) return;
+        Color from = fill.Color;
+        Color to = toSticky ? Color.FromRgb(230, 230, 230) : Colors.Transparent;
+        System.Windows.Media.Animation.ColorAnimation animation = new System.Windows.Media.Animation.ColorAnimation(from, to, new Duration(TimeSpan.FromMilliseconds(200)));
+        System.Windows.Media.Animation.CubicEase easing = new System.Windows.Media.Animation.CubicEase();
+        easing.EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut;
+        animation.EasingFunction = easing;
+        fill.BeginAnimation(SolidColorBrush.ColorProperty, animation);
+    }
+
+    public void EnterSticky()
+    {
+        _isSticky = true;
+        Topmost = true;
+    }
+
+    public void SetTransientTopmost(bool visible)
+    {
+        Topmost = ShouldBeTopmost(visible, _isSticky);
+    }
+
+    static bool ShouldBeTopmost(bool visible, bool sticky)
+    {
+        return visible || sticky;
+    }
+
+    internal static bool ShouldBeTopmostForTest(bool visible, bool sticky)
+    {
+        return ShouldBeTopmost(visible, sticky);
+    }
+
+    public void LeaveSticky()
+    {
+        _isSticky = false;
+        Topmost = false;
+        AnimatePin(_pinEllipse, _pinFill, false);
+        if (_stickyPinGrid != null) ToolTipService.SetToolTip(_stickyPinGrid, "钉住 popup");
+        Hide();
+    }
+
+    void Render()
+    {
+        if (Bindings == null || Bindings.timeText == null) return;
+        UsageSnapshot usage = DashboardState.Usage;
+        QuotaSnapshot quota = DashboardState.CodexQuota;
+        MiniMaxSnapshot minimax = DashboardState.MiniMax;
+        DeepSeekSnapshot deepseek = DashboardState.DeepSeek;
+
+        Bindings.timeText.Text = DateTime.Now.ToString("HH:mm:ss");
+        Color status = quota.Available ? Color.FromRgb(74, 222, 128) : Color.FromRgb(236, 83, 83);
+        Bindings.statusDot.Fill = new SolidColorBrush(status);
+        Bindings.statusGlow.Fill = GlowBrush(status);
+
+        if (Settings.codex.enabled)
+        {
+            Bindings.fivePercent.Text = quota.FiveHourAvailable ? quota.FiveHourRemainingPercent + "%" : "--";
+            Bindings.weekPercent.Text = quota.WeeklyAvailable ? quota.WeeklyRemainingPercent + "%" : "--";
+            Bindings.weekUsed.Text = FormatTokens(usage.WeekTokens);
+            Bindings.fiveUsed.Text = quota.FiveHourAvailable
+                ? PresentationText.TMinus(quota.FiveHourResetsAt, DateTime.Now)
+                : "";
+            UpdateMeter(Bindings.fiveFill, Bindings.fiveTrack, quota.FiveHourAvailable, quota.FiveHourRemainingPercent, QuietGlassPalette.FiveHourAllowance);
+            UpdateMeter(Bindings.weekFill, Bindings.weekTrack, quota.WeeklyAvailable, quota.WeeklyRemainingPercent, QuietGlassPalette.WeeklyAllowance);
+            Bindings.codexTokenUsage.Text = quota.Available ? "tokens " + FormatTokens(usage.TotalTokens) : "";
+        }
+        if (Settings.minimax.enabled)
+        {
+            Bindings.miniFivePercent.Text = minimax.Available ? minimax.FiveHourRemainingPercent + "%" : "--";
+            Bindings.miniWeekPercent.Text = minimax.Available ? minimax.WeeklyRemainingPercent + "%" : "--";
+            Bindings.miniFiveUsed.Text = PresentationText.MiniMaxTMinus(minimax.RemainsTime);
+            Bindings.miniWeekUsed.Text = "";
+            UpdateMeter(Bindings.miniFiveFill, Bindings.miniFiveTrack, minimax.Available, minimax.FiveHourRemainingPercent, QuietGlassPalette.FiveHourAllowance);
+            UpdateMeter(Bindings.miniWeekFill, Bindings.miniWeekTrack, minimax.Available, minimax.WeeklyRemainingPercent, QuietGlassPalette.WeeklyAllowance);
+            string miniTip = (minimax.IsStale ? "Stale: " : "") + minimax.Status;
+            if (!string.IsNullOrEmpty(minimax.RemainsTime)) miniTip += "\n5h: " + minimax.RemainsTime;
+            Bindings.miniHeading.ToolTip = miniTip;
+            Bindings.miniFivePercent.ToolTip = miniTip;
+            Bindings.miniWeekPercent.ToolTip = miniTip;
+        }
+        if (Settings.deepseek.enabled)
+        {
+            int? balancePercent = ProviderMath.RemainingPercent(deepseek.TotalBalance, Settings.deepseek.referenceBudget);
+            Bindings.deepSeekPercent.Text = (deepseek.Available && balancePercent.HasValue) ? balancePercent.Value + "%" : "--";
+            Bindings.deepSeekUsed.Text = deepseek.Available ? CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
+            UpdateMeter(Bindings.deepSeekFill, Bindings.deepSeekTrack, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault(), QuietGlassPalette.DeepSeekAllowance);
+            decimal estimatedCost = EstimateCost();
+            string estimate = estimatedCost > 0m && deepseek.TotalBalance >= 0m ? "\nAbout " + Math.Floor(deepseek.TotalBalance / estimatedCost).ToString("0") + " configured tasks" : "";
+            string deepTip = "Balance: " + CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + CurrencySymbol(deepseek.Currency) + Settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
+            Bindings.deepSeekHeading.ToolTip = deepTip;
+            Bindings.deepSeekPercent.ToolTip = deepTip;
+            Bindings.deepSeekUsed.ToolTip = deepTip;
+        }
+    }
+
+    decimal EstimateCost()
+    {
+        TokenPrices price;
+        if (!Settings.deepseek.estimate.enabled || !Settings.deepseek.pricesPerMillionTokens.TryGetValue(Settings.deepseek.estimate.model, out price)) return 0m;
+        return ProviderMath.EstimatedCostPerRequest(Settings.deepseek.estimate.averageInputTokens, Settings.deepseek.estimate.averageOutputTokens, Settings.deepseek.estimate.cacheHitRatio, price.inputCacheHit, price.inputCacheMiss, price.output);
+    }
+
+    void UpdateMeter(Border fill, Border track, bool available, int remaining, Color availableTone)
+    {
+        double width = track.ActualWidth;
+        if (width <= 0) width = Width - 40;
+        if (!available)
+        {
+            fill.Effect = null;
+            fill.Background = new SolidColorBrush(MeterFillColor(false, availableTone));
+            fill.Width = MeterFillWidth(false, remaining, width);
+            return;
+        }
+
+        fill.Background = AllowanceBrush(availableTone);
+        fill.Effect = new DropShadowEffect { Color = availableTone, BlurRadius = 6, ShadowDepth = 0, Opacity = 0.28 };
+        fill.Width = MeterFillWidth(true, remaining, width);
+    }
+
+    static LinearGradientBrush AllowanceBrush(Color tone)
+    {
+        Color highlight = Color.FromRgb((byte)Math.Min(255, tone.R + 34), (byte)Math.Min(255, tone.G + 34), (byte)Math.Min(255, tone.B + 34));
+        Color shade = Color.FromRgb((byte)Math.Max(0, tone.R - 16), (byte)Math.Max(0, tone.G - 16), (byte)Math.Max(0, tone.B - 16));
+        return new LinearGradientBrush(new GradientStopCollection {
+            new GradientStop(highlight, 0),
+            new GradientStop(tone, 0.58),
+            new GradientStop(shade, 1)
+        }, new Point(0, 0), new Point(1, 0));
+    }
+
+    static Color MeterFillColor(bool available, Color availableTone)
+    {
+        return available ? availableTone : QuietGlassPalette.UnavailableAllowance;
+    }
+
+    static double MeterFillWidth(bool available, int remaining, double trackWidth)
+    {
+        if (!available) return Math.Max(4, trackWidth);
+        return Math.Max(4, trackWidth * Math.Max(0, Math.Min(100, remaining)) / 100.0);
+    }
+
+    internal static Color MeterFillColorForTest(bool available, Color availableTone)
+    {
+        return MeterFillColor(available, availableTone);
+    }
+
+    internal static double MeterFillWidthForTest(bool available, int remaining, double trackWidth)
+    {
+        return MeterFillWidth(available, remaining, trackWidth);
+    }
+
+    public void StartRefresh()
+    {
+        _nextRefreshAt = DateTime.Now.AddSeconds(Settings.refreshSeconds);
+        if (Settings.codex.enabled && !_codexBusy) RefreshCodex();
+        if (Settings.minimax.enabled && !_minimaxBusy) RefreshMiniMax();
+        if (Settings.deepseek.enabled && !_deepseekBusy) RefreshDeepSeek();
+    }
+
+    void RefreshCodex()
+    {
+        _codexBusy = true;
+        UsageSnapshot prevUsage = DashboardState.Usage;
+        QuotaSnapshot prevQuota = DashboardState.CodexQuota;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            UsageSnapshot nextUsage;
+            QuotaSnapshot nextQuota;
+            try { nextUsage = NativeSqlite.ReadState(_dbPath); } catch (Exception ex) { nextUsage = new UsageSnapshot(false, 0, 0, 0, 0, ex.Message); }
+            try { nextQuota = CodexAppServerQuota.Fetch(); } catch (Exception ex) { nextQuota = new QuotaSnapshot(false, prevQuota.FiveHourRemainingPercent, prevQuota.WeeklyRemainingPercent, ex.Message, prevQuota.FiveHourResetsAt, prevQuota.WeeklyResetsAt); }
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                DashboardState.SetUsage(nextUsage);
+                DashboardState.SetCodexQuota(nextQuota);
+                _codexBusy = false;
+            }));
+        });
+    }
+
+    void RefreshMiniMax()
+    {
+        _minimaxBusy = true;
+        MiniMaxSnapshot prev = DashboardState.MiniMax;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            MiniMaxSnapshot next;
+            try { next = MiniMaxQuota.Fetch(Settings.minimax); }
+            catch (Exception ex) { next = new MiniMaxSnapshot(prev.Available, prev.FiveHourRemainingPercent, prev.WeeklyRemainingPercent, prev.Available, prev.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                DashboardState.SetMiniMax(next);
+                _minimaxBusy = false;
+            }));
+        });
+    }
+
+    void RefreshDeepSeek()
+    {
+        _deepseekBusy = true;
+        DeepSeekSnapshot prev = DashboardState.DeepSeek;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            DeepSeekSnapshot next = null;
+            string key = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY");
+            if (string.IsNullOrWhiteSpace(key)) key = WindowsCredentialStore.Read("CodexDashboard.DeepSeekApiKey");
+            bool allowOfficial = !string.Equals(Settings.deepseek.balanceMode, "manualOnly", StringComparison.OrdinalIgnoreCase);
+            if (allowOfficial && !string.IsNullOrWhiteSpace(key))
+            {
+                try { next = DeepSeekBalance.Fetch(key, Settings.deepseek.currency); }
+                catch (Exception ex) { if (string.Equals(Settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase)) next = new DeepSeekSnapshot(prev.Available, prev.TotalBalance, prev.GrantedBalance, prev.ToppedUpBalance, prev.Currency, prev.Available, prev.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
+            }
+            if (next == null && !string.Equals(Settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase))
+                next = new DeepSeekSnapshot(true, Settings.deepseek.manualBalance, 0m, Settings.deepseek.manualBalance, Settings.deepseek.currency, false, DateTime.Now, "DeepSeek manual balance", ProviderSource.Manual);
+            if (next == null) next = new DeepSeekSnapshot(prev.Available, prev.TotalBalance, prev.GrantedBalance, prev.ToppedUpBalance, prev.Currency, prev.Available, prev.LastSuccessAt, "DeepSeek API key is not available", ProviderSource.Cached);
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                DashboardState.SetDeepSeek(next);
+                _deepseekBusy = false;
+            }));
+        });
+    }
+
+    static string SafeProviderError(Exception ex)
+    {
+        string message = ex == null ? "provider failed" : ex.Message;
+        return message.Length > 120 ? message.Substring(0, 120) : message;
+    }
+
+    internal static RadialGradientBrush GlowBrush(Color color)
+    {
+        RadialGradientBrush brush = new RadialGradientBrush();
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(190, color.R, color.G, color.B), 0));
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(72, color.R, color.G, color.B), 0.42));
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1));
+        return brush;
+    }
+
+    internal static string FormatResetCountdown(DateTime? resetAt)
+    {
+        if (!resetAt.HasValue) return "--";
+        TimeSpan left = resetAt.Value - DateTime.Now;
+        if (left.TotalSeconds <= 0) return "now";
+        if (left.TotalHours >= 1) return ((int)left.TotalHours) + "h " + left.Minutes + "m";
+        return left.Minutes + "m";
+    }
+
+    internal static string FormatTokens(long value)
+    {
+        if (value >= 1000000000L) return (value / 1000000000.0).ToString("0.00") + "B";
+        if (value >= 1000000L) return (value / 1000000.0).ToString("0.00") + "M";
+        if (value >= 1000L) return (value / 1000.0).ToString("0.0") + "K";
+        return value.ToString();
+    }
+
+    internal static string CurrencySymbol(string currency)
+    {
+        return string.Equals(currency, "CNY", StringComparison.OrdinalIgnoreCase) ? "\u00a5"
+            : string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$"
+            : (currency ?? "") + " ";
+    }
+
+    public static double DesiredHeight(DashboardSettings s)
+    {
+        double h = 62;
+        if (s.codex != null && s.codex.enabled) h += 17 + 3 + 55;
+        if (s.minimax != null && s.minimax.enabled) h += ((s.codex != null && s.codex.enabled) ? 10 : 4) + 17 + 3 + 55;
+        if (s.deepseek != null && s.deepseek.enabled) h += ((s.codex != null && s.codex.enabled || s.minimax != null && s.minimax.enabled) ? 10 : 4) + 17 + 3 + 42;
+        return h + 30;
+    }
+
+    internal static void EnableSystemGlass(Window w)
+    {
+        try
+        {
+            IntPtr hwnd = new WindowInteropHelper(w).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            int corner = DWM_WINDOW_CORNER_PREFERENCE_ROUND;
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+            int backdrop = DWMSBT_TRANSIENTWINDOW;
+            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+            Margins margins = new Margins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
+            DwmExtendFrameIntoClientArea(hwnd, ref margins);
+
+            AccentPolicy accent = new AccentPolicy();
+            accent.AccentState = AccentState.ACCENT_ENABLE_ACRYLICBLURBEHIND;
+            accent.GradientColor = unchecked((int)0x381E1612);
+            int size = Marshal.SizeOf(accent);
+            IntPtr ptr = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(accent, ptr, false);
+                WindowCompositionAttributeData data = new WindowCompositionAttributeData();
+                data.Attribute = WindowCompositionAttribute.WCA_ACCENT_POLICY;
+                data.SizeOfData = size;
+                data.Data = ptr;
+                SetWindowCompositionAttribute(hwnd, ref data);
+            }
+            finally { Marshal.FreeHGlobal(ptr); }
+        }
+        catch { }
+    }
+}
+
+static class SettingsDialog
+{
+    public static void ShowProviderSettings(DashboardSettings settings)
     {
         DashboardSettings candidate = DashboardSettings.Load();
-        Window dialog = new Window { Title = "设置", Width = 460, Height = 700, MinWidth = 400, MinHeight = 540, WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = this, ResizeMode = ResizeMode.CanResize, Background = new SolidColorBrush(Color.FromRgb(31, 36, 48)), Foreground = Brushes.White };
+        Window dialog = new Window { Title = "设置", Width = 460, Height = 700, MinWidth = 400, MinHeight = 540, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.CanResize, Background = new SolidColorBrush(Color.FromRgb(31, 36, 48)), Foreground = Brushes.White };
+        Application app = Application.Current;
+        if (app != null && app.MainWindow != null) dialog.Owner = app.MainWindow;
         ScrollViewer scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         StackPanel panel = new StackPanel { Margin = new Thickness(20) }; scroll.Content = panel; dialog.Content = scroll;
+
+        panel.Children.Add(Section("常规"));
+        CheckBox launchAtLogin = Check("开机自动启动 Dashboard", candidate.launchAtLogin); panel.Children.Add(launchAtLogin);
 
         // ===== CODEX =====
         panel.Children.Add(Section("Codex"));
@@ -804,8 +1647,15 @@ class LiquidWindow : Window
             candidate.codex.enabled = codexEnabled.IsChecked == true;
             candidate.minimax.enabled = miniEnabled.IsChecked == true; candidate.minimax.mmxPath = mmxPath.Text.Trim(); candidate.minimax.quotaModelName = miniModel.Text.Trim();
             candidate.deepseek.enabled = deepEnabled.IsChecked == true; candidate.deepseek.balanceMode = DashboardSettings.NormalizeBalanceMode(Convert.ToString(mode.SelectedItem)); candidate.deepseek.currency = Convert.ToString(currency.SelectedItem); candidate.deepseek.manualBalance = manualValue; candidate.deepseek.referenceBudget = budgetValue;
-            try { candidate.Save(); } catch { MessageBox.Show(dialog, "设置保存失败，请检查磁盘权限。", "设置", MessageBoxButton.OK, MessageBoxImage.Error); return; }
-            settings = candidate; Height = DesiredHeight(); Content = BuildUi(); ApplyPercentEffects(); StartRefresh(); dialog.Close();
+            bool previousLaunchAtLogin = settings.launchAtLogin;
+            candidate.launchAtLogin = launchAtLogin.IsChecked == true;
+            try { StartupRegistration.Apply(candidate.launchAtLogin); candidate.Save(); }
+            catch
+            {
+                try { StartupRegistration.Apply(previousLaunchAtLogin); } catch { }
+                MessageBox.Show(dialog, "设置或开机启动项保存失败，请检查当前用户权限。", "设置", MessageBoxButton.OK, MessageBoxImage.Error); return;
+            }
+            settings.codex.enabled = candidate.codex.enabled; settings.minimax.enabled = candidate.minimax.enabled; settings.minimax.mmxPath = candidate.minimax.mmxPath; settings.minimax.quotaModelName = candidate.minimax.quotaModelName; settings.deepseek.enabled = candidate.deepseek.enabled; settings.deepseek.balanceMode = candidate.deepseek.balanceMode; settings.deepseek.currency = candidate.deepseek.currency; settings.deepseek.manualBalance = candidate.deepseek.manualBalance; settings.deepseek.referenceBudget = candidate.deepseek.referenceBudget; settings.launchAtLogin = candidate.launchAtLogin; dialog.Close();
         };
         buttons.Children.Add(cancel); buttons.Children.Add(save); panel.Children.Add(buttons); dialog.ShowDialog();
     }
@@ -816,282 +1666,706 @@ class LiquidWindow : Window
     static PasswordBox SecretField(StackPanel parent, string label) { parent.Children.Add(new TextBlock { Text = label, Opacity = 0.72, Margin = new Thickness(0, 7, 0, 2) }); PasswordBox box = new PasswordBox { Padding = new Thickness(6, 3, 6, 3) }; parent.Children.Add(box); return box; }
     static ComboBox Choice(StackPanel parent, string label, string[] values, string selected) { parent.Children.Add(new TextBlock { Text = label, Opacity = 0.72, Margin = new Thickness(0, 7, 0, 2) }); ComboBox box = new ComboBox { Padding = new Thickness(4, 2, 4, 2) }; foreach (string value in values) box.Items.Add(value); box.SelectedItem = Array.IndexOf(values, selected) >= 0 ? selected : values[0]; parent.Children.Add(box); return box; }
     static bool TryDecimal(string text, out decimal value) { return decimal.TryParse(text, out value) || decimal.TryParse(text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out value); }
+}
 
-    void AddMeter(Grid parent, int row, string label, out TextBlock percent, out TextBlock used, out Border track, out Border fill)
+interface INotifyIconBackend
+{
+    event System.Windows.Forms.MouseEventHandler MouseMove;
+    event EventHandler MouseLeave;
+    event EventHandler Click;
+    event EventHandler RightClick;
+    void Show();
+    void Hide();
+    void SetIcon(System.Drawing.Icon icon);
+    void SetContextMenu(System.Windows.Forms.ContextMenu menu);
+    void Dispose();
+}
+
+class TrayIconBackend : INotifyIconBackend
+{
+    internal System.Windows.Forms.NotifyIcon _icon;
+    public event System.Windows.Forms.MouseEventHandler MouseMove;
+    public event EventHandler MouseLeave;
+    public event EventHandler Click;
+    public event EventHandler RightClick;
+
+    public TrayIconBackend()
     {
-        Grid line = new Grid();
-        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) });
-        line.ColumnDefinitions.Add(new ColumnDefinition());
-        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
-        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });
-        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(22) });
-        line.RowDefinitions.Add(new RowDefinition { Height = new GridLength(10) });
-
-        TextBlock labelText = Text(label, 15, 0, 232, 240, 250, FontWeights.SemiBold);
-        percent = Text("--", 16, 0, 248, 251, 255, FontWeights.Bold); percent.HorizontalAlignment = HorizontalAlignment.Right;
-        used = Text("", 11, 0, 145, 160, 182, FontWeights.Normal); used.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetColumn(used, 2); Grid.SetColumn(percent, 3);
-        line.Children.Add(labelText); line.Children.Add(used); line.Children.Add(percent);
-
-        track = new Border { Height = 5, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(Color.FromArgb(82, 120, 132, 150)), VerticalAlignment = VerticalAlignment.Center };
-        fill = new Border { Height = 5, CornerRadius = new CornerRadius(3), Width = 4, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
-        Grid barGrid = new Grid(); barGrid.Children.Add(track); barGrid.Children.Add(fill);
-        Grid.SetRow(barGrid, 1); Grid.SetColumnSpan(barGrid, 4); line.Children.Add(barGrid);
-
-        Grid.SetRow(line, row); parent.Children.Add(line);
-    }
-
-    TextBlock AddSectionHeader(Grid parent, int row, string label)
-    {
-        TextBlock heading = Text(label, 10.5, 0, 130, 147, 170, FontWeights.SemiBold);
-        heading.VerticalAlignment = VerticalAlignment.Bottom;
-        Grid.SetRow(heading, row); parent.Children.Add(heading);
-        return heading;
-    }
-
-    void AddDivider(Grid parent, int row)
-    {
-        Border line = new Border { Height = 1, Background = new SolidColorBrush(Color.FromArgb(20, 255, 255, 255)), Margin = new Thickness(0, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetRow(line, row); parent.Children.Add(line);
-    }
-
-    TextBlock Text(string text, double size, byte a, byte r, byte g, byte b, FontWeight weight)
-    {
-        return new TextBlock { Text = text, FontSize = size, Foreground = new SolidColorBrush(Color.FromArgb(a == 0 ? (byte)255 : a, r, g, b)), FontWeight = weight, VerticalAlignment = VerticalAlignment.Center };
-    }
-
-    void StartRefresh()
-    {
-        nextRefreshAt = DateTime.Now.AddSeconds(settings.refreshSeconds);
-        if (settings.codex.enabled && !codexBusy) RefreshCodex();
-        if (settings.minimax.enabled && !minimaxBusy) RefreshMiniMax();
-        if (settings.deepseek.enabled && !deepseekBusy) RefreshDeepSeek();
-        Render();
-    }
-
-    void RefreshCodex()
-    {
-        codexBusy = true;
-        ThreadPool.QueueUserWorkItem(delegate
+        _icon = new System.Windows.Forms.NotifyIcon();
+        _icon.MouseMove += delegate(object s, System.Windows.Forms.MouseEventArgs e) { var h = MouseMove; if (h != null) h(s, e); };
+        _icon.Click += delegate { var h = Click; if (h != null) h(this, EventArgs.Empty); };
+        _icon.MouseClick += delegate(object s, System.Windows.Forms.MouseEventArgs e)
         {
-            UsageSnapshot nextUsage; QuotaSnapshot nextQuota;
-            try { nextUsage = NativeSqlite.ReadState(dbPath); } catch (Exception ex) { nextUsage = new UsageSnapshot(false, 0, 0, 0, 0, ex.Message); }
-            try { nextQuota = CodexAppServerQuota.Fetch(); } catch (Exception ex) { nextQuota = new QuotaSnapshot(false, quota.FiveHourRemainingPercent, quota.WeeklyRemainingPercent, ex.Message, quota.FiveHourResetsAt, quota.WeeklyResetsAt); }
-            Dispatcher.BeginInvoke(new Action(delegate { usage = nextUsage; quota = nextQuota; codexBusy = false; lastRefreshAt = DateTime.Now; Render(); }));
-        });
+            if (e.Button != System.Windows.Forms.MouseButtons.Right) return;
+            var h = RightClick; if (h != null) h(this, EventArgs.Empty);
+        };
     }
 
-    void RefreshMiniMax()
-    {
-        minimaxBusy = true;
-        ThreadPool.QueueUserWorkItem(delegate
-        {
-            MiniMaxSnapshot next;
-            try { next = MiniMaxQuota.Fetch(settings.minimax); }
-            catch (Exception ex) { next = new MiniMaxSnapshot(minimax.Available, minimax.FiveHourRemainingPercent, minimax.WeeklyRemainingPercent, minimax.Available, minimax.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
-            Dispatcher.BeginInvoke(new Action(delegate { minimax = next; minimaxBusy = false; Render(); }));
-        });
-    }
+    public void Show() { _icon.Visible = true; }
+    public void Hide() { _icon.Visible = false; }
+    public void SetIcon(System.Drawing.Icon icon) { _icon.Icon = icon; }
+    public void SetContextMenu(System.Windows.Forms.ContextMenu menu) { _icon.ContextMenu = menu; }
+    public void Dispose() { _icon.Visible = false; _icon.Dispose(); }
+}
 
-    void RefreshDeepSeek()
+static class BitmapFactory
+{
+    static readonly System.Drawing.Color TrayGlyphForeground =
+        System.Drawing.Color.FromArgb(255, 221, 226, 234);
+    static readonly System.Drawing.Color TrayGlyphShadow =
+        System.Drawing.Color.FromArgb(255, 43, 50, 61);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool DestroyIcon(IntPtr handle);
+
+    public static System.Drawing.Icon CreateTrayIcon(TrayIconVisual visual, int size)
     {
-        deepseekBusy = true;
-        ThreadPool.QueueUserWorkItem(delegate
+        if (visual == null) throw new ArgumentNullException("visual");
+        if (size != 16 && size != 20 && size != 24 && size != 32)
+            throw new ArgumentOutOfRangeException("size", "Tray icons support only 16, 20, 24, or 32 pixels.");
+
+        using (System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(size, size))
+        using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(bmp))
         {
-            DeepSeekSnapshot next = null;
-            string key = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY");
-            if (string.IsNullOrWhiteSpace(key)) key = WindowsCredentialStore.Read("CodexDashboard.DeepSeekApiKey");
-            bool allowOfficial = !string.Equals(settings.deepseek.balanceMode, "manualOnly", StringComparison.OrdinalIgnoreCase);
-            if (allowOfficial && !string.IsNullOrWhiteSpace(key))
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            g.Clear(System.Drawing.Color.Transparent);
+            DrawOpenGauge(g, visual, size);
+
+            IntPtr nativeHandle = bmp.GetHicon();
+            try
             {
-                try { next = DeepSeekBalance.Fetch(key, settings.deepseek.currency); }
-                catch (Exception ex) { if (string.Equals(settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase)) next = new DeepSeekSnapshot(deepseek.Available, deepseek.TotalBalance, deepseek.GrantedBalance, deepseek.ToppedUpBalance, deepseek.Currency, deepseek.Available, deepseek.LastSuccessAt, SafeProviderError(ex), ProviderSource.Cached); }
+                return (System.Drawing.Icon)System.Drawing.Icon.FromHandle(nativeHandle).Clone();
             }
-            if (next == null && !string.Equals(settings.deepseek.balanceMode, "officialOnly", StringComparison.OrdinalIgnoreCase))
-                next = new DeepSeekSnapshot(true, settings.deepseek.manualBalance, 0m, settings.deepseek.manualBalance, settings.deepseek.currency, false, DateTime.Now, "DeepSeek manual balance", ProviderSource.Manual);
-            if (next == null) next = new DeepSeekSnapshot(deepseek.Available, deepseek.TotalBalance, deepseek.GrantedBalance, deepseek.ToppedUpBalance, deepseek.Currency, deepseek.Available, deepseek.LastSuccessAt, "DeepSeek API key is not available", ProviderSource.Cached);
-            Dispatcher.BeginInvoke(new Action(delegate { deepseek = next; deepseekBusy = false; Render(); }));
+            finally
+            {
+                if (nativeHandle != IntPtr.Zero) DestroyIcon(nativeHandle);
+            }
+        }
+    }
+
+    static void DrawOpenGauge(System.Drawing.Graphics g, TrayIconVisual visual, int size)
+    {
+        float scale = size / 16f;
+        float inset = Math.Max(1.5f, 2.5f * scale);
+        float stroke = Math.Max(1.25f, 1.55f * scale);
+        System.Drawing.RectangleF ring = new System.Drawing.RectangleF(
+            inset, inset, size - inset * 2f, size - inset * 2f);
+        using (System.Drawing.Pen shadow = new System.Drawing.Pen(
+            TrayGlyphShadow, stroke + Math.Max(0.7f, 0.75f * scale)))
+        using (System.Drawing.Pen foreground = new System.Drawing.Pen(
+            TrayGlyphForeground, stroke))
+        {
+            shadow.StartCap = shadow.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+            foreground.StartCap = foreground.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+            g.DrawArc(shadow, ring, 135f, 270f);
+            g.DrawArc(foreground, ring, 135f, 270f);
+        }
+
+        if (visual.Kind == TrayIconVisualKind.Percentage)
+        {
+            DrawPercentage(g, visual.Percentage, size);
+            return;
+        }
+
+        using (System.Drawing.SolidBrush indicator = new System.Drawing.SolidBrush(TrayGlyphForeground))
+        using (System.Drawing.Pen indicatorShadow = new System.Drawing.Pen(
+            TrayGlyphShadow, Math.Max(0.8f, scale)))
+        {
+            float cx = size / 2f;
+            float cy = size / 2f;
+            float radius = Math.Max(1.2f, 1.35f * scale);
+            g.DrawLine(indicatorShadow, cx, cy + radius * 1.8f, cx + radius * 1.7f, cy - radius * 0.8f);
+            g.FillEllipse(indicator, cx - radius, cy - radius, radius * 2f, radius * 2f);
+        }
+    }
+
+    static void DrawPercentage(System.Drawing.Graphics g, int percentage, int size)
+    {
+        bool exactHundred = percentage == 100;
+        if (exactHundred)
+        {
+            DrawExactHundred(g, size);
+            return;
+        }
+
+        string text = percentage.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        float fontSize = size * (percentage >= 10 ? 0.39f : 0.46f);
+        System.Drawing.RectangleF layout = new System.Drawing.RectangleF(0f, size * 0.27f, size, size * 0.48f);
+        using (System.Drawing.Font font = new System.Drawing.Font(
+            System.Drawing.FontFamily.GenericSansSerif, fontSize, System.Drawing.FontStyle.Bold,
+            System.Drawing.GraphicsUnit.Pixel))
+        using (System.Drawing.StringFormat format = new System.Drawing.StringFormat())
+        using (System.Drawing.SolidBrush shadow = new System.Drawing.SolidBrush(TrayGlyphShadow))
+        using (System.Drawing.SolidBrush foreground = new System.Drawing.SolidBrush(TrayGlyphForeground))
+        {
+            format.Alignment = System.Drawing.StringAlignment.Center;
+            format.LineAlignment = System.Drawing.StringAlignment.Center;
+            format.FormatFlags = System.Drawing.StringFormatFlags.NoWrap;
+            System.Drawing.RectangleF shadowLayout = layout;
+            shadowLayout.Offset(0f, Math.Max(0.6f, size / 32f));
+            g.DrawString(text, font, shadow, shadowLayout, format);
+            g.DrawString(text, font, foreground, layout, format);
+        }
+    }
+
+    static void DrawExactHundred(System.Drawing.Graphics g, int size)
+    {
+        float scale = size / 16f;
+        System.Drawing.RectangleF[] strokes = new[]
+        {
+            new System.Drawing.RectangleF(3f, 5f, 2f, 1f),
+            new System.Drawing.RectangleF(4f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(3f, 10f, 3f, 1f),
+            new System.Drawing.RectangleF(7f, 5f, 3f, 1f),
+            new System.Drawing.RectangleF(7f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(9f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(7f, 10f, 3f, 1f),
+            new System.Drawing.RectangleF(11f, 5f, 3f, 1f),
+            new System.Drawing.RectangleF(11f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(13f, 5f, 1f, 6f),
+            new System.Drawing.RectangleF(11f, 10f, 3f, 1f)
+        };
+        System.Drawing.Drawing2D.SmoothingMode previousSmoothing = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        try
+        {
+            using (System.Drawing.SolidBrush shadow = new System.Drawing.SolidBrush(TrayGlyphShadow))
+            using (System.Drawing.SolidBrush foreground = new System.Drawing.SolidBrush(TrayGlyphForeground))
+            {
+                foreach (System.Drawing.RectangleF stroke in strokes)
+                {
+                    System.Drawing.RectangleF scaled = new System.Drawing.RectangleF(
+                        stroke.X * scale, stroke.Y * scale, stroke.Width * scale, stroke.Height * scale);
+                    System.Drawing.RectangleF shadowStroke = scaled;
+                    shadowStroke.Offset(0f, Math.Max(0.6f, scale * 0.5f));
+                    g.FillRectangle(shadow, shadowStroke);
+                }
+                foreach (System.Drawing.RectangleF stroke in strokes)
+                {
+                    g.FillRectangle(foreground, stroke.X * scale, stroke.Y * scale,
+                        stroke.Width * scale, stroke.Height * scale);
+                }
+            }
+        }
+        finally { g.SmoothingMode = previousSmoothing; }
+    }
+}
+
+sealed class TrayIconCache : IDisposable
+{
+    readonly Dictionary<string, System.Drawing.Icon> _icons = new Dictionary<string, System.Drawing.Icon>();
+    bool _disposed;
+
+    public System.Drawing.Icon Get(TrayIconVisual visual, int size)
+    {
+        if (_disposed) throw new ObjectDisposedException("TrayIconCache");
+        string key = ((int)visual.Kind).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + ":" + visual.Percentage.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + ":" + size.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        System.Drawing.Icon icon;
+        if (_icons.TryGetValue(key, out icon)) return icon;
+        icon = BitmapFactory.CreateTrayIcon(visual, size);
+        _icons.Add(key, icon);
+        return icon;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        foreach (System.Drawing.Icon icon in _icons.Values) icon.Dispose();
+        _icons.Clear();
+    }
+}
+
+static class TrayIconSizing
+{
+    const uint MonitorDefaultToNearest = 2;
+
+    [DllImport("user32.dll")]
+    static extern IntPtr MonitorFromPoint(System.Drawing.Point point, uint flags);
+
+    [DllImport("shcore.dll")]
+    static extern int GetScaleFactorForMonitor(IntPtr monitor, out int scalePercent);
+
+    public static int ForScalePercent(int scalePercent)
+    {
+        if (scalePercent <= 0) scalePercent = 100;
+        int[] supported = new[] { 16, 20, 24, 32 };
+        double scaledPixels = 16.0 * scalePercent / 100.0;
+        int nearest = supported[0];
+        double nearestDistance = Math.Abs(scaledPixels - nearest);
+        for (int index = 1; index < supported.Length; index++)
+        {
+            double distance = Math.Abs(scaledPixels - supported[index]);
+            if (distance < nearestDistance)
+            {
+                nearest = supported[index];
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    public static int ResolvePixelSize(Func<int> scaleLookup)
+    {
+        int scalePercent = 100;
+        try
+        {
+            int candidate = scaleLookup == null ? 0 : scaleLookup();
+            if (candidate > 0) scalePercent = candidate;
+        }
+        catch { }
+        return ForScalePercent(scalePercent);
+    }
+
+    public static int ScalePercentAtPoint(System.Drawing.Point point)
+    {
+        IntPtr monitor = MonitorFromPoint(point, MonitorDefaultToNearest);
+        if (monitor == IntPtr.Zero) return 100;
+        int scalePercent;
+        return GetScaleFactorForMonitor(monitor, out scalePercent) == 0 && scalePercent > 0
+            ? scalePercent
+            : 100;
+    }
+}
+
+enum TrayEdge
+{
+    Top,
+    Bottom
+}
+
+class TrayController : IDisposable
+{
+    const int PopupGap = 8;
+    const int AutoHideReserve = 64;
+    const int TrayAnchorTolerance = 32;
+    const uint SWP_NOSIZE = 0x0001;
+    const uint SWP_NOZORDER = 0x0004;
+    const uint SWP_NOACTIVATE = 0x0010;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct NativeRect
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
+
+    readonly INotifyIconBackend _backend;
+    readonly DashboardSettings _settings;
+    readonly PopupWindow _popup;
+    readonly DispatcherTimer _hoverTimer;
+    readonly DispatcherTimer _dismissTimer;
+    readonly DispatcherTimer _cursorPollTimer;
+    readonly TrayIconCache _iconCache;
+    readonly Action<DashboardSettings> _saveSettings;
+    readonly Func<System.Drawing.Point, int> _trayScaleLookup;
+    System.Windows.Forms.ContextMenu _contextMenu;
+    TrayIconVisual _currentVisual;
+    int _currentIconSize;
+    bool _hasCurrentVisual;
+    bool _disposed;
+    bool _cursorOverTray;
+    bool _hasTrayAnchor;
+    System.Drawing.Point _lastTrayPoint;
+
+    public PopupWindow Popup { get { return _popup; } }
+
+    public TrayController(DashboardSettings settings, INotifyIconBackend backend, PopupWindow popup)
+        : this(settings, backend, popup, delegate(DashboardSettings value) { value.Save(); })
+    {
+    }
+
+    public TrayController(
+        DashboardSettings settings,
+        INotifyIconBackend backend,
+        PopupWindow popup,
+        Action<DashboardSettings> saveSettings)
+        : this(settings, backend, popup, saveSettings, TrayIconSizing.ScalePercentAtPoint)
+    {
+    }
+
+    internal TrayController(
+        DashboardSettings settings,
+        INotifyIconBackend backend,
+        PopupWindow popup,
+        Action<DashboardSettings> saveSettings,
+        Func<System.Drawing.Point, int> trayScaleLookup)
+    {
+        _settings = settings;
+        _backend = backend;
+        _popup = popup;
+        _saveSettings = saveSettings ?? delegate { };
+        _trayScaleLookup = trayScaleLookup ?? TrayIconSizing.ScalePercentAtPoint;
+        _iconCache = new TrayIconCache();
+        _cursorOverTray = false;
+        bool initializationComplete = false;
+
+        try
+        {
+        _hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(settings.popupHoverDelayMs) };
+        _hoverTimer.Tick += delegate { _hoverTimer.Stop(); ShowPopup(); };
+
+        _dismissTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(settings.popupDismissDelayMs) };
+        _dismissTimer.Tick += delegate
+        {
+            _dismissTimer.Stop();
+            if (!_popup.IsSticky)
+            {
+                _popup.SetTransientTopmost(false);
+                _popup.Hide();
+            }
+        };
+
+        // Cursor poll: NotifyIcon has no MouseLeave event; poll Control.MousePosition
+        // every 100ms to detect when the cursor leaves the active monitor's top or
+        // bottom tray band. Only run while the popup is visible.
+        _cursorPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _cursorPollTimer.Tick += delegate { OnCursorPollTick(); };
+        _popup.IsVisibleChanged += delegate
+        {
+            if (_popup.IsVisible) _cursorPollTimer.Start();
+            else _cursorPollTimer.Stop();
+        };
+
+        _backend.MouseMove += delegate { OnTrayMouseMove(); };
+        _popup.MouseEnter += delegate { _dismissTimer.Stop(); };
+        _popup.MouseLeave += delegate { if (!_popup.IsSticky) _dismissTimer.Start(); };
+
+        try
+        {
+            RefreshIcon();
+            _backend.Show();
+        }
+        catch { /* fallback: handled in Task 9 if tray unavailable */ }
+
+        System.Windows.Forms.ContextMenu menu = new System.Windows.Forms.ContextMenu();
+        _contextMenu = menu;
+        System.Windows.Forms.MenuItem pinItem = new System.Windows.Forms.MenuItem("钉住 popup");
+        pinItem.Click += delegate
+        {
+            if (!_popup.IsSticky)
+            {
+                _popup.EnterSticky();
+                ShowStickyPopup();
+            }
+            pinItem.Checked = _popup.IsSticky;
+        };
+        System.Windows.Forms.MenuItem defaultIconItem = new System.Windows.Forms.MenuItem("默认图标");
+        System.Windows.Forms.MenuItem percentageIconItem = new System.Windows.Forms.MenuItem("Codex 5 小时百分比");
+        defaultIconItem.Click += delegate { SelectTrayIconMode(TrayIconMode.Default); };
+        percentageIconItem.Click += delegate { SelectTrayIconMode(TrayIconMode.Percentage); };
+        menu.Popup += delegate
+        {
+            pinItem.Checked = _popup.IsSticky;
+            TrayIconMode mode = DashboardSettings.NormalizeTrayIconMode(_settings.trayIconMode);
+            defaultIconItem.Checked = mode == TrayIconMode.Default;
+            percentageIconItem.Checked = mode == TrayIconMode.Percentage;
+        };
+
+        System.Windows.Forms.MenuItem settingsItem = new System.Windows.Forms.MenuItem("设置…");
+        settingsItem.Click += delegate
+        {
+            SettingsDialog.ShowProviderSettings(_settings);
+            _popup.Height = PopupWindow.DesiredHeight(_settings);
+        };
+
+        System.Windows.Forms.MenuItem exitItem = new System.Windows.Forms.MenuItem("退出");
+        exitItem.Click += delegate { System.Windows.Application.Current.Shutdown(); };
+
+        menu.MenuItems.Add(pinItem);
+        menu.MenuItems.Add(defaultIconItem);
+        menu.MenuItems.Add(percentageIconItem);
+        menu.MenuItems.Add(settingsItem);
+        menu.MenuItems.Add(new System.Windows.Forms.MenuItem("-"));
+        menu.MenuItems.Add(exitItem);
+
+        _backend.SetContextMenu(menu);
+
+        _backend.Click += delegate { ShowPopup(); };
+        DashboardState.Changed += OnDashboardStateChanged;
+        initializationComplete = true;
+        }
+        finally
+        {
+            if (!initializationComplete) Dispose();
+        }
+    }
+
+    void OnDashboardStateChanged()
+    {
+        if (!_disposed) RefreshIcon();
+    }
+
+    void SelectTrayIconMode(TrayIconMode mode)
+    {
+        _settings.trayIconMode = mode == TrayIconMode.Percentage ? "percentage" : "default";
+        RefreshIcon();
+        try { _saveSettings(_settings); } catch { }
+    }
+
+    internal void RefreshIcon()
+    {
+        TrayIconVisual next = TrayIconState.Select(
+            DashboardSettings.NormalizeTrayIconMode(_settings.trayIconMode), DashboardState.CodexQuota);
+        int iconSize = TrayIconSizing.ResolvePixelSize(delegate
+        {
+            System.Drawing.Point point = _hasTrayAnchor
+                ? _lastTrayPoint
+                : System.Windows.Forms.Control.MousePosition;
+            return _trayScaleLookup(point);
         });
+        if (_hasCurrentVisual && _currentVisual.Equals(next) && _currentIconSize == iconSize) return;
+        System.Drawing.Icon icon = _iconCache.Get(next, iconSize);
+        _backend.SetIcon(icon);
+        _currentVisual = next;
+        _currentIconSize = iconSize;
+        _hasCurrentVisual = true;
     }
 
-    static string SafeProviderError(Exception ex)
+    void OnTrayMouseMove()
     {
-        string message = ex == null ? "provider failed" : ex.Message;
-        return message.Length > 120 ? message.Substring(0, 120) : message;
+        _dismissTimer.Stop();
+        _lastTrayPoint = System.Windows.Forms.Control.MousePosition;
+        _hasTrayAnchor = true;
+        RefreshIcon();
+        _cursorOverTray = true;
+        if (!_hoverTimer.IsEnabled && !_popup.IsVisible) _hoverTimer.Start();
     }
 
-    void Render()
+    void OnCursorPollTick()
     {
-        timeText.Text = DateTime.Now.ToString("HH:mm:ss");
-        Color status = codexBusy ? Color.FromRgb(245, 180, 55) : quota.Available ? Color.FromRgb(74, 222, 128) : Color.FromRgb(236, 83, 83);
-        statusDot.Fill = new SolidColorBrush(status);
-        statusGlow.Fill = GlowBrush(status);
+        System.Drawing.Point cursor = System.Windows.Forms.Control.MousePosition;
+        bool overTrayArea = IsOverTrayArea(cursor);
+        if (overTrayArea)
+        {
+            _cursorOverTray = true;
+            _dismissTimer.Stop();
+        }
+        else if (_cursorOverTray)
+        {
+            _cursorOverTray = false;
+            if (_popup.IsVisible && !_popup.IsSticky && !_popup.IsMouseOver)
+            {
+                _dismissTimer.Start();
+            }
+        }
+    }
 
-        if (settings.codex.enabled)
+    bool IsOverTrayArea(System.Drawing.Point cursor)
+    {
+        // Use the cursor's own monitor's work area, not SystemParameters.WorkArea
+        // (which is the primary monitor only). On dual-screen setups where the
+        // tray icon lives on the secondary, the primary-only check would
+        // immediately fail and dismiss the popup 300ms after it appeared.
+        System.Windows.Forms.Screen screen = System.Windows.Forms.Screen.FromPoint(cursor);
+        if (screen == null) return false;
+        if (_hasTrayAnchor) return IsWithinTrayAnchor(cursor, _lastTrayPoint, TrayAnchorTolerance);
+        System.Drawing.Rectangle wa = screen.WorkingArea;
+        TrayEdge edge = InferTrayEdge(cursor, screen.Bounds);
+        bool inEdgeBand = edge == TrayEdge.Top
+            ? cursor.Y <= wa.Top + 16
+            : cursor.Y >= wa.Bottom - 16;
+        return inEdgeBand;
+    }
+
+    static bool IsWithinTrayAnchor(
+        System.Drawing.Point cursor, System.Drawing.Point anchor, int tolerance)
+    {
+        return tolerance >= 0
+            && Math.Abs(cursor.X - anchor.X) <= tolerance
+            && Math.Abs(cursor.Y - anchor.Y) <= tolerance;
+    }
+
+    internal static bool IsWithinTrayAnchorForTest(
+        System.Drawing.Point cursor, System.Drawing.Point anchor, int tolerance)
+    {
+        return IsWithinTrayAnchor(cursor, anchor, tolerance);
+    }
+
+    public void ShowPopup()
+    {
+        ShowAutoPositionedPopup();
+    }
+
+    public void ShowStickyPopup()
+    {
+        Rect virtualDipBounds = new Rect(
+            SystemParameters.VirtualScreenLeft,
+            SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth,
+            SystemParameters.VirtualScreenHeight);
+        if (IsSavedDipPositionOnVirtualScreen(
+            _settings.popupLeft, _settings.popupTop, _popup.Width, _popup.Height, virtualDipBounds))
         {
-            UpdateMeter(fivePercent, fiveUsed, fiveTrack, fiveFill, quota.Available, quota.FiveHourRemainingPercent, usage.FiveHourTokens, Color.FromRgb(74, 222, 128));
-            UpdateMeter(weekPercent, weekUsed, weekTrack, weekFill, quota.Available, quota.WeeklyRemainingPercent, usage.WeekTokens, Color.FromRgb(74, 222, 128));
-            fiveUsed.Text = "resets " + FormatResetCountdown(quota.FiveHourResetsAt);
+            _popup.Left = _settings.popupLeft;
+            _popup.Top = _settings.popupTop;
+            _popup.SetTransientTopmost(true);
+            _popup.Show();
+            return;
         }
-        if (settings.minimax.enabled)
+
+        ShowAutoPositionedPopup();
+    }
+
+    void ShowAutoPositionedPopup()
+    {
+        System.Drawing.Point cursorPos = System.Windows.Forms.Control.MousePosition;
+        System.Windows.Forms.Screen screen = System.Windows.Forms.Screen.FromPoint(cursorPos);
+
+        // Keep a visible WPF/DIP fallback in case native positioning is unavailable.
+        _popup.Left = SystemParameters.WorkArea.Right - _popup.Width - PopupGap;
+        _popup.Top = SystemParameters.WorkArea.Bottom - _popup.Height - PopupGap;
+        _popup.SetTransientTopmost(true);
+        _popup.Show();
+
+        IntPtr hwnd = new WindowInteropHelper(_popup).Handle;
+        if (hwnd == IntPtr.Zero) return;
+
+        // Stage 1: move the HWND into the cursor's monitor. Crossing the monitor
+        // boundary can change its DPI-dependent size, so the old size is not used.
+        System.Drawing.Point probeOrigin = CalculateProbeOrigin(screen.Bounds, screen.WorkingArea);
+        if (!SetWindowPos(hwnd, IntPtr.Zero, probeOrigin.X, probeOrigin.Y, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)) return;
+
+        // Stage 2: remeasure in the target monitor's process-coordinate space, then
+        // calculate and apply the final origin without mixing in WPF DIP values.
+        NativeRect targetRect;
+        if (!GetWindowRect(hwnd, out targetRect)) return;
+        System.Drawing.Size targetSize = new System.Drawing.Size(
+            Math.Max(1, targetRect.Right - targetRect.Left),
+            Math.Max(1, targetRect.Bottom - targetRect.Top));
+        System.Drawing.Point finalOrigin = CalculatePopupOrigin(
+            cursorPos, screen.Bounds, screen.WorkingArea, targetSize);
+        // If this final move fails, the stage-1 probe remains safely visible.
+        if (!SetWindowPos(hwnd, IntPtr.Zero, finalOrigin.X, finalOrigin.Y, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)) return;
+    }
+
+    static bool IsSavedDipPositionOnVirtualScreen(
+        double left, double top, double width, double height, Rect virtualDipBounds)
+    {
+        if (double.IsNaN(left) || double.IsNaN(top) || width <= 0 || height <= 0) return false;
+        Rect savedRect = new Rect(left, top, width, height);
+        Rect visibleRect = Rect.Intersect(savedRect, virtualDipBounds);
+        return !visibleRect.IsEmpty && visibleRect.Width >= 50 && visibleRect.Height >= 50;
+    }
+
+    internal static bool IsSavedDipPositionOnVirtualScreenForTest(
+        double left, double top, double width, double height, Rect virtualDipBounds)
+    {
+        return IsSavedDipPositionOnVirtualScreen(left, top, width, height, virtualDipBounds);
+    }
+
+    static TrayEdge InferTrayEdge(System.Drawing.Point cursor, System.Drawing.Rectangle bounds)
+    {
+        int distanceToTop = Math.Abs(cursor.Y - bounds.Top);
+        int distanceToBottom = Math.Abs(bounds.Bottom - cursor.Y);
+        return distanceToTop <= distanceToBottom ? TrayEdge.Top : TrayEdge.Bottom;
+    }
+
+    internal static TrayEdge InferTrayEdgeForTest(System.Drawing.Point cursor, System.Drawing.Rectangle bounds)
+    {
+        return InferTrayEdge(cursor, bounds);
+    }
+
+    static System.Drawing.Point CalculateProbeOrigin(
+        System.Drawing.Rectangle bounds, System.Drawing.Rectangle workingArea)
+    {
+        int safeTop = Math.Max(workingArea.Top, bounds.Top + AutoHideReserve);
+        return new System.Drawing.Point(workingArea.Left + PopupGap, safeTop + PopupGap);
+    }
+
+    internal static System.Drawing.Point CalculateProbeOriginForTest(
+        System.Drawing.Rectangle bounds, System.Drawing.Rectangle workingArea)
+    {
+        return CalculateProbeOrigin(bounds, workingArea);
+    }
+
+    static System.Drawing.Point CalculatePopupOrigin(
+        System.Drawing.Point cursor,
+        System.Drawing.Rectangle bounds,
+        System.Drawing.Rectangle workingArea,
+        System.Drawing.Size popupSize)
+    {
+        TrayEdge edge = InferTrayEdge(cursor, bounds);
+        int x = cursor.X - popupSize.Width - PopupGap;
+        int minX = workingArea.Left + PopupGap;
+        int maxX = workingArea.Right - popupSize.Width - PopupGap;
+        x = Math.Max(minX, Math.Min(x, maxX));
+
+        int y;
+        if (edge == TrayEdge.Top)
         {
-            UpdateMeter(miniFivePercent, miniFiveUsed, miniFiveTrack, miniFiveFill, minimax.Available, minimax.FiveHourRemainingPercent, 0, Color.FromRgb(74, 222, 128));
-            UpdateMeter(miniWeekPercent, miniWeekUsed, miniWeekTrack, miniWeekFill, minimax.Available, minimax.WeeklyRemainingPercent, 0, Color.FromRgb(74, 222, 128));
-            miniFiveUsed.Text = !string.IsNullOrEmpty(minimax.RemainsTime) ? "resets " + minimax.RemainsTime : "";
-            miniWeekUsed.Text = "";
-            string miniTip = (minimax.IsStale ? "Stale: " : "") + minimax.Status;
-            if (!string.IsNullOrEmpty(minimax.RemainsTime)) miniTip += "\n5h: " + minimax.RemainsTime;
-            miniHeading.ToolTip = miniTip; miniFivePercent.ToolTip = miniTip; miniWeekPercent.ToolTip = miniTip;
-        }
-        if (settings.deepseek.enabled)
-        {
-            int? balancePercent = ProviderMath.RemainingPercent(deepseek.TotalBalance, settings.deepseek.referenceBudget);
-            UpdateMeter(deepSeekPercent, deepSeekUsed, deepSeekTrack, deepSeekFill, deepseek.Available && balancePercent.HasValue, balancePercent.GetValueOrDefault(), 0, Color.FromRgb(74, 222, 128));
-            deepSeekUsed.Text = deepseek.Available ? CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") : deepseek.Status;
-            decimal estimatedCost = EstimateCost();
-            string estimate = estimatedCost > 0m && deepseek.TotalBalance >= 0m ? "\nAbout " + Math.Floor(deepseek.TotalBalance / estimatedCost).ToString("0") + " configured tasks" : "";
-            string deepTip = "Balance: " + CurrencySymbol(deepseek.Currency) + deepseek.TotalBalance.ToString("0.00") + "\nTopped up: " + CurrencySymbol(deepseek.Currency) + deepseek.ToppedUpBalance.ToString("0.00") + "\nGranted: " + CurrencySymbol(deepseek.Currency) + deepseek.GrantedBalance.ToString("0.00") + "\nReference budget: " + CurrencySymbol(deepseek.Currency) + settings.deepseek.referenceBudget.ToString("0.00") + estimate + "\nStatus: " + (deepseek.Source == ProviderSource.Manual ? "Manual" : deepseek.IsStale ? "Stale" : "Fresh") + "\n" + deepseek.Status;
-            deepSeekHeading.ToolTip = deepTip; deepSeekPercent.ToolTip = deepTip; deepSeekUsed.ToolTip = deepTip;
-        }
-        if (settings.codex.enabled)
-        {
-            footerLeft.Text = quota.Available ? "tokens " + FormatTokens(usage.TotalTokens) : "";
-            footerRight.Text = "";
+            int safeTop = Math.Max(workingArea.Top, bounds.Top + AutoHideReserve);
+            y = safeTop + PopupGap;
         }
         else
         {
-            footerLeft.Text = "";
-            footerRight.Text = "";
+            int safeBottom = Math.Min(workingArea.Bottom, bounds.Bottom - AutoHideReserve);
+            y = safeBottom - popupSize.Height - PopupGap;
         }
-        int seconds = Math.Max(0, (int)Math.Ceiling((nextRefreshAt - DateTime.Now).TotalSeconds));
-        footerSub.Text = "refresh " + seconds + "s";
+
+        int minY = workingArea.Top + PopupGap;
+        int maxY = workingArea.Bottom - popupSize.Height - PopupGap;
+        y = Math.Max(minY, Math.Min(y, maxY));
+        return new System.Drawing.Point(x, y);
     }
 
-    decimal EstimateCost()
+    internal static System.Drawing.Point CalculatePopupOriginForTest(
+        System.Drawing.Point cursor,
+        System.Drawing.Rectangle bounds,
+        System.Drawing.Rectangle workingArea,
+        System.Drawing.Size popupSize)
     {
-        TokenPrices price;
-        if (!settings.deepseek.estimate.enabled || !settings.deepseek.pricesPerMillionTokens.TryGetValue(settings.deepseek.estimate.model, out price)) return 0m;
-        return ProviderMath.EstimatedCostPerRequest(settings.deepseek.estimate.averageInputTokens, settings.deepseek.estimate.averageOutputTokens, settings.deepseek.estimate.cacheHitRatio, price.inputCacheHit, price.inputCacheMiss, price.output);
+        return CalculatePopupOrigin(cursor, bounds, workingArea, popupSize);
     }
 
-    static string CurrencySymbol(string currency) { return string.Equals(currency, "CNY", StringComparison.OrdinalIgnoreCase) ? "\u00a5" : string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : (currency ?? "") + " "; }
-
-    void UpdateMeter(TextBlock percent, TextBlock used, Border track, Border fill, bool available, int remaining, long tokens, Color accent)
+    public void Dispose()
     {
-        percent.Text = available ? remaining + "%" : "--";
-        used.Text = FormatTokens(tokens);
-        Color fillColor = remaining <= 10 ? Color.FromRgb(236, 83, 83) : accent;
-        fill.Background = new LinearGradientBrush(
-            new GradientStopCollection {
-                new GradientStop(Color.FromArgb(130, 255, 255, 255), 0),
-                new GradientStop(Color.FromArgb(245, (byte)Math.Min(255, fillColor.R + 24), (byte)Math.Min(255, fillColor.G + 24), (byte)Math.Min(255, fillColor.B + 24)), 0.18),
-                new GradientStop(fillColor, 0.6),
-                new GradientStop(Color.FromArgb(238, (byte)Math.Max(0, fillColor.R - 16), (byte)Math.Max(0, fillColor.G - 16), (byte)Math.Max(0, fillColor.B - 16)), 1)
-            },
-            new Point(0, 0),
-            new Point(0, 1));
-        double width = track.ActualWidth;
-        if (width <= 0) width = Width - 40;
-        fill.Width = Math.Max(4, width * Math.Max(0, Math.Min(100, remaining)) / 100.0);
-    }
-
-    void EnableSystemGlass()
-    {
+        if (_disposed) return;
+        _disposed = true;
+        DashboardState.Changed -= OnDashboardStateChanged;
         try
         {
-            IntPtr hwnd = new WindowInteropHelper(this).Handle;
-            if (hwnd == IntPtr.Zero) return;
-            int corner = DWM_WINDOW_CORNER_PREFERENCE_ROUND;
-            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
-            int backdrop = DWMSBT_TRANSIENTWINDOW;
-            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
-            Margins margins = new Margins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
-            DwmExtendFrameIntoClientArea(hwnd, ref margins);
-
-            AccentPolicy accent = new AccentPolicy();
-            accent.AccentState = AccentState.ACCENT_ENABLE_ACRYLICBLURBEHIND;
-            accent.GradientColor = unchecked((int)0x381E1612);
-            int size = Marshal.SizeOf(accent);
-            IntPtr ptr = Marshal.AllocHGlobal(size);
+            if (_cursorPollTimer != null) _cursorPollTimer.Stop();
+            if (_hoverTimer != null) _hoverTimer.Stop();
+            if (_dismissTimer != null) _dismissTimer.Stop();
+        }
+        finally
+        {
             try
             {
-                Marshal.StructureToPtr(accent, ptr, false);
-                WindowCompositionAttributeData data = new WindowCompositionAttributeData();
-                data.Attribute = WindowCompositionAttribute.WCA_ACCENT_POLICY;
-                data.SizeOfData = size;
-                data.Data = ptr;
-                SetWindowCompositionAttribute(hwnd, ref data);
+                if (_popup != null) _popup.Close();
             }
-            finally { Marshal.FreeHGlobal(ptr); }
+            finally
+            {
+                try
+                {
+                    if (_backend != null) _backend.Dispose();
+                }
+                finally
+                {
+                    try
+                    {
+                        if (_contextMenu != null) _contextMenu.Dispose();
+                    }
+                    finally
+                    {
+                        if (_iconCache != null) _iconCache.Dispose();
+                    }
+                }
+            }
         }
-        catch { }
     }
 
-    IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-    {
-        if (msg != WM_NCHITTEST) return IntPtr.Zero;
-        int x = unchecked((short)((long)lParam & 0xffff));
-        int y = unchecked((short)(((long)lParam >> 16) & 0xffff));
-        Point p = PointFromScreen(new Point(x, y));
-        bool left = p.X <= ResizeGrip, right = p.X >= ActualWidth - ResizeGrip;
-        bool top = p.Y <= ResizeGrip, bottom = p.Y >= ActualHeight - ResizeGrip;
-        int hit = 0;
-        if (left && top) hit = HTTOPLEFT;
-        else if (right && top) hit = HTTOPRIGHT;
-        else if (left && bottom) hit = HTBOTTOMLEFT;
-        else if (right && bottom) hit = HTBOTTOMRIGHT;
-        else if (left) hit = HTLEFT;
-        else if (right) hit = HTRIGHT;
-        else if (top) hit = HTTOP;
-        else if (bottom) hit = HTBOTTOM;
-        if (hit == 0) return IntPtr.Zero;
-        handled = true;
-        return new IntPtr(hit);
-    }
-
-    bool IsOnResizeEdge(Point p)
-    {
-        return p.X <= ResizeGrip || p.Y <= ResizeGrip || p.X >= ActualWidth - ResizeGrip || p.Y >= ActualHeight - ResizeGrip;
-    }
-
-    static bool IsOnScreen(double left, double top, double width, double height)
-    {
-        if (double.IsNaN(left) || double.IsNaN(top) || width <= 0 || height <= 0) return false;
-        double vsL = SystemParameters.VirtualScreenLeft, vsT = SystemParameters.VirtualScreenTop;
-        double vsR = vsL + SystemParameters.VirtualScreenWidth, vsB = vsT + SystemParameters.VirtualScreenHeight;
-        // Require at least 50×50 px visible
-        return left + width - 50 > vsL && left + 50 < vsR && top + height - 50 > vsT && top + 50 < vsB;
-    }
-
-    static RadialGradientBrush GlowBrush(Color color)
-    {
-        RadialGradientBrush brush = new RadialGradientBrush();
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(190, color.R, color.G, color.B), 0));
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(72, color.R, color.G, color.B), 0.42));
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1));
-        return brush;
-    }
-
-    static DropShadowEffect Glow(Color color, double blur, double opacity)
-    {
-        return new DropShadowEffect { Color = color, BlurRadius = blur, ShadowDepth = 0, Opacity = opacity };
-    }
-
-    static string FormatResetCountdown(DateTime? resetAt)
-    {
-        if (!resetAt.HasValue) return "--";
-        TimeSpan left = resetAt.Value - DateTime.Now;
-        if (left.TotalSeconds <= 0) return "now";
-        if (left.TotalHours >= 1) return ((int)left.TotalHours) + "h " + left.Minutes + "m";
-        return left.Minutes + "m";
-    }
-    static string FormatTokens(long value)
-    {
-        if (value >= 1000000000L) return (value / 1000000000.0).ToString("0.00") + "B";
-        if (value >= 1000000L) return (value / 1000000.0).ToString("0.00") + "M";
-        if (value >= 1000L) return (value / 1000.0).ToString("0.0") + "K";
-        return value.ToString();
-    }
 }
 
 static class Program
@@ -1099,7 +2373,26 @@ static class Program
     [STAThread]
     static void Main()
     {
+        DashboardSettings settings = DashboardSettings.Load();
         Application app = new Application();
-        app.Run(new LiquidWindow());
+        app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+        Window bootstrapper = new Window { Width = 0, Height = 0, ShowInTaskbar = false, Visibility = Visibility.Hidden, WindowStyle = WindowStyle.None };
+        bootstrapper.Show();
+        bootstrapper.Hide();
+
+        PopupWindow popup = new PopupWindow(settings);
+        TrayIconBackend backend = new TrayIconBackend();
+        TrayController controller = new TrayController(settings, backend, popup);
+
+        app.Exit += delegate { controller.Dispose(); };
+
+        if (settings.popupStickyOnLaunch)
+        {
+            popup.EnterSticky();
+            controller.ShowStickyPopup();
+        }
+
+        app.Run(bootstrapper);
     }
 }

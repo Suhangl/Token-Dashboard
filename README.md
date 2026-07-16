@@ -20,11 +20,23 @@ Right-click the widget → **Settings** to configure providers.
 
 ## Features
 
-- Borderless always-on-top panel with DWM Acrylic glass
+- System tray with hover-to-peek popup; pin via 📌 to keep visible
+- Borderless always-on-top Quiet Glass panel, inspired by Windows liquid-glass styling
 - **Codex**: 5h + weekly quota via local `app-server` JSON-RPC; token estimate from SQLite
 - **MiniMax**: 5h + weekly percentage via `mmx` CLI or Token Plan remains API
 - **DeepSeek**: balance via official API with manual/official/fallback modes
-- Auto-refresh every 60s; status dot (green/yellow/red); position/size persisted on close
+- Embedded status dot · auto-refresh 60s · position persisted
+- Available meters use a pale-grey fill; unavailable meters use black, without an `Unavailable` label
+- History tracking with reset detection; burn ghost rendering upcoming
+
+### Tray icon modes
+
+Right-click the tray icon and select **默认图标** or **Codex 5 小时百分比**.
+
+- **默认图标** shows the default open-gauge icon.
+- **Codex 5 小时百分比** shows the remaining Codex 5-hour allowance and preserves an exact `100`. If 5-hour data is unavailable, the tray automatically shows the default open-gauge icon. The percentage preference stays selected and recovers automatically when valid data returns.
+
+Quiet Glass is Windows Liquid-Glass-inspired; it does not claim Apple-native Liquid Glass behavior.
 
 ## Data Sources & Privacy
 
@@ -49,7 +61,7 @@ No telemetry. API keys stored in **Windows Credential Manager**, never in `setti
 
 - Token counts are local estimates, not official
 - MiniMax `remains_time` suppressed when API returns raw numeric with unconfirmed units
-- DWM Acrylic requires Windows 10+
+- Quiet Glass system effects require Windows 10+
 
 ## Roadmap
 
@@ -57,7 +69,7 @@ No telemetry. API keys stored in **Windows Credential Manager**, never in `setti
 - [x] Stale-data tracking & source tagging
 - [x] Window position/size/topmost persistence
 - [ ] Configurable refresh interval in UI
-- [ ] Tray icon with minimize-to-tray
+- [x] Tray icon with minimize-to-tray
 - [ ] Hook-driven Codex status (working/approval/idle)
 
 ---

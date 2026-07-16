@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title description">
+  <title id="title">Quiet Glass open gauge application icon</title>
+  <desc id="description">An original cool slate open gauge ring with a quiet green status point on a transparent canvas.</desc>
+  <defs>
+    <linearGradient id="ring" x1="14" y1="11" x2="50" y2="53" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d5e0eb"/>
+      <stop offset="0.48" stop-color="#8fa5b8"/>
+      <stop offset="1" stop-color="#586c80"/>
+    </linearGradient>
+  </defs>
+  <!-- No background shape: the canvas and corners remain transparent. -->
+  <!-- The ICO generator procedurally redraws this shared 135deg/270deg gauge geometry. -->
+  <path d="M17.36 46.64 A20.7 20.7 0 1 1 46.64 46.64"
+        fill="none" stroke="#2b3542" stroke-opacity=".55" stroke-width="9"
+        stroke-linecap="round" transform="translate(0 1.25)"/>
+  <path d="M17.36 46.64 A20.7 20.7 0 1 1 46.64 46.64"
+        fill="none" stroke="url(#ring)" stroke-width="7.25" stroke-linecap="round"/>
+  <path d="M19.8 43.9 A17.2 17.2 0 0 1 44.2 19.8"
+        fill="none" stroke="#f4f8fb" stroke-opacity=".45" stroke-width="1.35"
+        stroke-linecap="round"/>
+  <path d="M32 32 L40.2 26.4" fill="none" stroke="#667d91" stroke-width="3.1" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="3.35" fill="#76a990"/>
+</svg>
